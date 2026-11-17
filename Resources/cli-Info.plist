@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleIdentifier</key>
+    <string>local.earshot.cli</string>
+    <key>CFBundleName</key>
+    <string>earshot-cli</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Earshot transcribes your side of the call on this Mac. Audio never leaves the device.</string>
+    <key>NSAudioCaptureUsageDescription</key>
+    <string>Earshot transcribes the other participants of your calls on this Mac. Audio never leaves the device.</string>
+</dict>
+</plist>

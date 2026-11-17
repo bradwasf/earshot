@@ -1,0 +1,533 @@
+import AVFoundation
+import AppKit
+import EarshotCore
+import SwiftUI
+
+/// User preferences, persisted in UserDefaults.
+enum Preference {
+    static let systemSource = "systemSource"  // "tap", "none", or a device UID
+    static let microphone = "microphone"  // "" = system default, "off", or a device UID
+    static let asrModel = "asrModel"
+    static let summaryModel = "summaryModel"
+    static let saveAudio = "saveAudio"
+    static let echoCancellation = "echoCancellation"
+    static let echoGuard = "echoGuard"
+    static let diarization = "diarization"
+    static let summarize = "summarize"
+    static let callsFolder = "callsFolder"
+
+    static func register() {
+        UserDefaults.standard.register(defaults: [
+            systemSource: "tap",
+            microphone: "",
+            asrModel: AsrModelChoice.ultra.rawValue,
+            summaryModel: Summarizer.defaultModel,
+            saveAudio: false,
+            echoCancellation: true,
+            echoGuard: true,
+            diarization: true,
+            summarize: true,
+            callsFolder: CallFolder.defaultRoot.path,
+        ])
+    }
+}
+
+/// Append-only diagnostics log at ~/Library/Logs/Earshot/earshot.log (never contains transcript text).
+enum Log {
+    private static let url: URL = {
+        let directory = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Logs/Earshot")
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory.appendingPathComponent("earshot.log")
+    }()
+    private static let queue = DispatchQueue(label: "earshot.log")
+
+    static func write(_ message: String) {
+        let line = "\(ISO8601DateFormatter().string(from: Date())) \(message)\n"
+        queue.async {
+            if let handle = try? FileHandle(forWritingTo: url) {
+                handle.seekToEndOfFile()
+                handle.write(Data(line.utf8))
+                try? handle.close()
+            } else {
+                try? Data(line.utf8).write(to: url)
+            }
+        }
+    }
+}
+
+/// A block of talk as drawn in the transcript (live or saved).
+struct DisplayTurn: Identifiable, Equatable {
+    let id: String
+    let label: String
+    let time: String
+    let text: String
+    /// 0 = Me, 1… = remote speakers (see `Theme.tone`).
+    let tone: Int
+}
+
+/// A finished call shown in the window (just recorded, or opened from the library).
+struct CallDocument: Equatable {
+    var folder: URL
+    var title: String
+    var detail: String
+    var turns: [DisplayTurn]
+    var summary: String?
+}
+
+/// Rolling input levels for the waveform ribbon. Kept apart from `AppModel` so that twenty-odd
+/// meter updates per second redraw only the ribbon, not the transcript.
+@MainActor
+final class MeterModel: ObservableObject {
+    @Published private(set) var me: [Float] = []
+    @Published private(set) var them: [Float] = []
+    private static let capacity = 400
+
+    func push(_ channel: Channel, _ level: Float) {
+        let value = Self.normalized(level)
+        switch channel {
+        case .me:
+            me.append(value)
+            if me.count > Self.capacity { me.removeFirst(me.count - Self.capacity) }
+        case .them:
+            them.append(value)
+            if them.count > Self.capacity { them.removeFirst(them.count - Self.capacity) }
+        }
+    }
+
+    func reset() {
+        me = []
+        them = []
+    }
+
+    var latest: Float { max(me.last ?? 0, them.last ?? 0) }
+
+    /// RMS → 0…1 on a −60…−10 dBFS scale.
+    static func normalized(_ level: Float) -> Float {
+        guard level > 0 else { return 0 }
+        return min(1, max(0, (20 * log10(level) + 60) / 50))
+    }
+}
+
+@MainActor
+final class AppModel: ObservableObject {
+    enum Phase: Equatable {
+        case loading(String)
+        case failed(String)
+        case idle
+        case starting
+        case recording
+        case finishing(String)
+    }
+
+    enum Screen: Equatable {
+        /// Recent calls, ready to record.
+        case home
+        /// A recording in progress.
+        case live
+        /// A finished call (`document`).
+        case call
+    }
+
+    enum Tab: String, CaseIterable {
+        case transcript = "Transcript"
+        case summary = "Summary"
+    }
+
+    @Published var phase: Phase = .loading("Loading models…")
+    @Published var screen: Screen = .home
+    @Published var tab: Tab = .transcript
+    /// Title typed for the next recording.
+    @Published var title = ""
+    @Published var liveTurns: [DisplayTurn] = []
+    @Published var partials: [Channel: String] = [:]
+    @Published var elapsed: Double = 0
+    @Published var warnings: [String] = []
+    @Published var document: CallDocument?
+    @Published var library: [SavedCall] = []
+    @Published var status = ""
+    @Published var heardSystemAudio = false
+    @Published var installedSummaryModels: [String] = []
+
+    let meter = MeterModel()
+
+    private var segments: [TranscriptSegment] = []
+    private var liveFolder: URL?
+    private var models: SpeechModels?
+    private var session: CallSession?
+    private var timer: Timer?
+    private var startedAt = Date()
+    private var autoStopAfter: Double?
+    /// Loudest input level seen per channel during the current call (for the diagnostics log).
+    private var peakLevels: [Channel: Float] = [:]
+    private var exitWhenDone = false
+
+    var isRecording: Bool { phase == .recording }
+    var isBusy: Bool {
+        switch phase {
+        case .loading, .starting, .finishing: return true
+        default: return false
+        }
+    }
+
+    private var callsRoot: URL {
+        URL(fileURLWithPath: UserDefaults.standard.string(forKey: Preference.callsFolder) ?? CallFolder.defaultRoot.path)
+    }
+
+    init() {
+        Preference.register()
+        parseLaunchArguments()
+        refreshLibrary()
+        Task { await loadModels() }
+        Task { await refreshSummaryModels() }
+    }
+
+    // MARK: - Models
+
+    private var modelOptions: SpeechModelOptions {
+        let defaults = UserDefaults.standard
+        return SpeechModelOptions(
+            asr: AsrModelChoice(rawValue: defaults.string(forKey: Preference.asrModel) ?? "") ?? .ultra,
+            diarization: defaults.bool(forKey: Preference.diarization),
+            echoCancellation: defaults.bool(forKey: Preference.echoCancellation))
+    }
+
+    func loadModels() async {
+        let options = modelOptions
+        if let models, models.options == options { return }
+        phase = .loading("Loading models…")
+        do {
+            let loaded = try await SpeechModels.load(options) { message in
+                Task { @MainActor in
+                    if case .loading = self.phase { self.phase = .loading(message) }
+                }
+            }
+            models = loaded
+            phase = .idle
+            status = "Ready"
+            Log.write("models loaded: \(options.asr.rawValue)")
+            if autoStart {
+                autoStart = false
+                await start()
+            }
+        } catch {
+            phase = .failed("Could not load the speech models: \(error.localizedDescription)")
+            Log.write("model load failed: \(error.localizedDescription)")
+        }
+    }
+
+    func refreshSummaryModels() async {
+        installedSummaryModels = await OllamaClient().installedModels().sorted()
+    }
+
+    // MARK: - Library
+
+    func refreshLibrary() {
+        let root = callsRoot
+        Task.detached(priority: .userInitiated) {
+            let calls = CallLibrary.list(root: root)
+            await MainActor.run { self.library = calls }
+        }
+    }
+
+    func open(_ call: SavedCall) {
+        guard !isRecording, let loaded = Self.loadDocument(call.folder, date: call.date) else { return }
+        document = loaded
+        tab = loaded.summary != nil ? .summary : .transcript
+        screen = .call
+    }
+
+    func goHome() {
+        guard !isRecording else { return }
+        document = nil
+        screen = .home
+        refreshLibrary()
+    }
+
+    private static func loadDocument(_ folder: URL, date: Date) -> CallDocument? {
+        guard let loaded = CallLibrary.load(folder: folder) else { return nil }
+        let formatter = DateFormatter()
+        formatter.dateFormat = "EEE d MMM yyyy · HH:mm"
+        var detail = formatter.string(from: date)
+        if let duration = loaded.duration { detail += " · \(duration)" }
+        let turns = loaded.turns.map {
+            DisplayTurn(
+                id: "saved-\($0.id)", label: $0.label, time: $0.time, text: $0.text,
+                tone: Theme.tone(channel: $0.channel, speaker: $0.speaker))
+        }
+        return CallDocument(
+            folder: folder, title: loaded.title, detail: detail, turns: turns, summary: CallLibrary.summary(folder: folder))
+    }
+
+    // MARK: - Recording
+
+    func toggle() {
+        Task {
+            if isRecording {
+                await stop()
+            } else if phase == .idle {
+                if screen == .call { title = "" }
+                await start()
+            }
+        }
+    }
+
+    func start() async {
+        await loadModels()
+        guard phase == .idle, let models else { return }
+        phase = .starting
+        let defaults = UserDefaults.standard
+
+        // Microphone permission (the system-audio prompt appears when the tap opens).
+        var captureMicrophone = defaults.string(forKey: Preference.microphone) != "off"
+        var startWarnings: [String] = []
+        if captureMicrophone {
+            let granted = await AVCaptureDevice.requestAccess(for: .audio)
+            if !granted {
+                captureMicrophone = false
+                startWarnings.append(
+                    "Microphone access is off, so only the other side is transcribed. Enable Earshot in System Settings › Privacy & Security › Microphone."
+                )
+            }
+        }
+
+        let systemAudio: SystemAudioChoice
+        switch defaults.string(forKey: Preference.systemSource) ?? "tap" {
+        case "tap": systemAudio = .tap
+        case "none": systemAudio = .none
+        case let uid:
+            if AudioDevices.device(uid: uid) != nil {
+                systemAudio = .device(uid: uid)
+            } else {
+                systemAudio = .tap
+                startWarnings.append("The selected system-audio device is not connected; using the native tap instead.")
+            }
+        }
+
+        let typedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let microphoneUID = defaults.string(forKey: Preference.microphone).flatMap { $0.isEmpty || $0 == "off" ? nil : $0 }
+        let config = SessionConfig(
+            title: typedTitle.isEmpty ? Self.placeholderTitle() : typedTitle,
+            titleIsPlaceholder: typedTitle.isEmpty,
+            root: callsRoot,
+            systemAudio: systemAudio,
+            captureMicrophone: captureMicrophone,
+            microphoneUID: microphoneUID,
+            saveAudio: defaults.bool(forKey: Preference.saveAudio),
+            echoTextGuard: defaults.bool(forKey: Preference.echoGuard))
+
+        segments = []
+        liveTurns = []
+        partials = [:]
+        warnings = startWarnings
+        heardSystemAudio = false
+        elapsed = 0
+        peakLevels = [:]
+        meter.reset()
+
+        let session = CallSession(config: config, models: models) { [weak self] event in
+            Task { @MainActor in self?.handle(event) }
+        }
+        do {
+            try await session.start()
+        } catch {
+            phase = .idle
+            warnings.append("Could not start recording: \(error.localizedDescription)")
+            Log.write("start failed: \(error.localizedDescription)")
+            return
+        }
+        self.session = session
+        liveFolder = await session.folderURL
+        startedAt = Date()
+        document = nil
+        tab = .transcript
+        screen = .live
+        phase = .recording
+        status = "Saving to \(liveFolder?.lastPathComponent ?? "…") as you talk"
+        Log.write("recording started: system=\(systemAudio) mic=\(captureMicrophone)")
+
+        timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, self.isRecording else { return }
+                self.elapsed = Date().timeIntervalSince(self.startedAt)
+                if let limit = self.autoStopAfter, self.elapsed >= limit {
+                    self.autoStopAfter = nil
+                    await self.stop()
+                }
+            }
+        }
+    }
+
+    func stop() async {
+        guard phase == .recording, let session else { return }
+        phase = .finishing("Finishing transcript…")
+        timer?.invalidate()
+        timer = nil
+        guard var result = await session.stop() else {
+            phase = .idle
+            screen = .home
+            return
+        }
+        self.session = nil
+        partials = [:]
+        meter.reset()
+        title = ""
+        document = Self.loadDocument(result.folder.url, date: result.startedAt)
+        screen = .call
+        tab = .transcript
+        Log.write(
+            "recording stopped: \(Int(result.duration)) s, \(result.segments.count) lines, word latency "
+                + result.metrics.wordLatency.map { "\($0.key) p50 \(String(format: "%.2f", $0.value.p50)) p95 \(String(format: "%.2f", $0.value.p95))" }
+                .sorted().joined(separator: ", ")
+                + "; peak input level " + Channel.allCases.map {
+                    "\($0.rawValue) \(peakLevels[$0].map { String(format: "%.0f dBFS", 20 * log10(Double(max($0, 1e-7)))) } ?? "no signal")"
+                }.joined(separator: ", "))
+
+        if UserDefaults.standard.bool(forKey: Preference.summarize), !result.segments.isEmpty {
+            let model = UserDefaults.standard.string(forKey: Preference.summaryModel) ?? Summarizer.defaultModel
+            phase = .finishing("Summarizing with \(model)…")
+            tab = .summary
+            do {
+                let written = try await CallSummary.write(for: &result, model: model) { message in
+                    Task { @MainActor in
+                        if case .finishing = self.phase { self.phase = .finishing(message) }
+                    }
+                }
+                status = "Transcript and summary saved"
+                Log.write("summary written with \(model) in \(Int(written.seconds)) s")
+            } catch {
+                CallSummary.writeFailure(folder: result.folder.url, title: result.title, error: error)
+                warnings.append(error.localizedDescription)
+                status = "Transcript saved (the summary failed)"
+                Log.write("summary failed: \(error.localizedDescription)")
+            }
+            // The summary may have renamed the call; show what is on disk now.
+            document = Self.loadDocument(result.folder.url, date: result.startedAt) ?? document
+        } else {
+            status = result.segments.isEmpty ? "No speech was detected" : "Transcript saved"
+        }
+        phase = .idle
+        refreshLibrary()
+        if exitWhenDone { NSApp.terminate(nil) }
+    }
+
+    func regenerateSummary() {
+        guard let folder = document?.folder, phase == .idle else { return }
+        let model = UserDefaults.standard.string(forKey: Preference.summaryModel) ?? Summarizer.defaultModel
+        phase = .finishing("Summarizing with \(model)…")
+        tab = .summary
+        document?.summary = nil
+        Task {
+            do {
+                let written = try await CallSummary.regenerate(folder: folder, model: model) { message in
+                    Task { @MainActor in
+                        if case .finishing = self.phase { self.phase = .finishing(message) }
+                    }
+                }
+                document?.summary = written.markdown
+                status = "Summary regenerated"
+            } catch {
+                document?.summary = CallLibrary.summary(folder: folder)
+                warnings.append(error.localizedDescription)
+            }
+            phase = .idle
+            refreshLibrary()
+        }
+    }
+
+    func revealInFinder() {
+        if let folder = document?.folder ?? liveFolder, FileManager.default.fileExists(atPath: folder.path) {
+            NSWorkspace.shared.activateFileViewerSelecting([folder])
+        } else {
+            openCallsFolder()
+        }
+    }
+
+    func openCallsFolder() {
+        try? FileManager.default.createDirectory(at: callsRoot, withIntermediateDirectories: true)
+        NSWorkspace.shared.open(callsRoot)
+    }
+
+    /// Called on quit: never lose an in-progress call.
+    func stopForTermination() async {
+        if isRecording, let session {
+            timer?.invalidate()
+            _ = await session.stop()
+        }
+    }
+
+    // MARK: - Events
+
+    private func handle(_ event: SessionEvent) {
+        switch event {
+        case .segment(let segment):
+            let index = segments.firstIndex { $0.start > segment.start } ?? segments.count
+            segments.insert(segment, at: index)
+            rebuildLiveTurns()
+        case .partial(let channel, let text, _):
+            if partials[channel] != text { partials[channel] = text }
+        case .level(let channel, let level):
+            meter.push(channel, level)
+            peakLevels[channel] = max(peakLevels[channel] ?? 0, level)
+            if channel == .them && level > 0.0005 && !heardSystemAudio { heardSystemAudio = true }
+        case .warning(let message):
+            warnings.append(message)
+            Log.write("warning: \(message)")
+        }
+    }
+
+    private func rebuildLiveTurns() {
+        // Same rule as the saved transcript: a remote voice gets its own label once it has
+        // spoken for three seconds.
+        var speakerTime: [Int: Double] = [:]
+        for segment in segments where segment.channel == .them {
+            if let speaker = segment.speaker { speakerTime[speaker, default: 0] += segment.end - segment.start }
+        }
+        let remoteSpeakers = speakerTime.values.filter { $0 >= 3 }.count
+        liveTurns = TranscriptFormat.turns(segments, remoteSpeakers: remoteSpeakers).map {
+            DisplayTurn(
+                id: $0.id, label: $0.label, time: TranscriptFormat.timestamp($0.start), text: $0.text,
+                tone: remoteSpeakers > 1 ? Theme.tone(channel: $0.channel, speaker: $0.speaker) : ($0.channel == .me ? 0 : 1))
+        }
+    }
+
+    // MARK: - Helpers
+
+    /// "Zoom call", "FaceTime call"… when a meeting app is running; otherwise "Call".
+    static func placeholderTitle() -> String {
+        let apps: [(bundle: String, name: String)] = [
+            ("us.zoom.xos", "Zoom"), ("com.microsoft.teams2", "Teams"), ("com.microsoft.teams", "Teams"),
+            ("com.apple.FaceTime", "FaceTime"), ("com.cisco.webexmeetingsapp", "Webex"),
+            ("com.tinyspeck.slackmacgap", "Slack"), ("com.hnc.Discord", "Discord"),
+        ]
+        let running = Set(NSWorkspace.shared.runningApplications.compactMap(\.bundleIdentifier))
+        if let frontmost = NSWorkspace.shared.frontmostApplication?.bundleIdentifier,
+            let match = apps.first(where: { $0.bundle == frontmost })
+        {
+            return "\(match.name) call"
+        }
+        if let match = apps.first(where: { running.contains($0.bundle) && $0.name != "Slack" && $0.name != "Discord" }) {
+            return "\(match.name) call"
+        }
+        return "Call"
+    }
+
+    // Launch arguments used by the end-to-end test:
+    //   --autostart --stop-after 60 --title "X" --exit-when-done --appearance light|dark --open-latest
+    private var autoStart = false
+
+    private func parseLaunchArguments() {
+        let arguments = CommandLine.arguments
+        autoStart = arguments.contains("--autostart")
+        exitWhenDone = arguments.contains("--exit-when-done")
+        if let index = arguments.firstIndex(of: "--stop-after"), index + 1 < arguments.count {
+            autoStopAfter = Double(arguments[index + 1])
+        }
+        if let index = arguments.firstIndex(of: "--title"), index + 1 < arguments.count {
+            title = arguments[index + 1]
+        }
+        if arguments.contains("--open-latest") {
+            if let latest = CallLibrary.list(root: callsRoot).first { open(latest) }
+            if arguments.contains("--transcript") { tab = .transcript }
+        }
+    }
+}
