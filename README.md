@@ -240,3 +240,7 @@ To release: open a pull request from `dev` into `prod` and merge it with a merge
 - Speaker separation distinguishes at most four remote voices and can mislabel short interjections. "Me" vs "Them" does not depend on it.
 - Two people talking at once on the same side are transcribed as one stream.
 - The first words after pressing Record can be clipped if someone is mid-sentence.
+
+## License
+
+[MIT](LICENSE). Earshot downloads third-party speech models (through [FluidAudio](https://github.com/FluidInference/FluidAudio)) and uses an Ollama model at run time; those have their own licenses.
