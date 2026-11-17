@@ -7,7 +7,8 @@
 #   ./setup.sh --install          also copy Earshot.app to /Applications
 #
 # Network use: Swift packages (GitHub), speech models (HuggingFace), the summary model (Ollama
-# registry) and, optionally, Homebrew. After setup, Earshot itself never talks to the network.
+# registry) and, optionally, Homebrew. After setup, Earshot itself only talks to the network when
+# you choose "Send to Slack" for a call summary.
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -18,7 +19,7 @@ for argument in "$@"; do
     case "$argument" in
         --with-blackhole) WITH_BLACKHOLE=1 ;;
         --install) INSTALL=1 ;;
-        -h|--help) sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help) sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "Unknown option: $argument" >&2; exit 2 ;;
     esac
 done

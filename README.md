@@ -7,7 +7,9 @@ A fully local macOS app that live-transcribes the calls you join and summarizes 
 - **Both sides, separately.** Your microphone is labelled **Me**; the Mac's audio (Zoom, Meet, Teams, FaceTime, anything) is labelled **Them**, with remote speakers told apart as *Them 1*, *Them 2*… when there is more than one.
 - **Live.** Words appear about half a second after they are spoken.
 - **Summaries.** When you stop, a local LLM writes `summary.md`: TL;DR, key points, decisions, action items with owners, open questions.
-- **Private.** Speech recognition runs on the Neural Engine through Core ML; the summary runs in Ollama on `127.0.0.1`. No cloud API is called and no audio or text leaves the Mac.
+- **Asks when you join.** When Zoom, Slack, Teams, Discord, Webex or FaceTime starts a call, a small card asks "Start transcribing?", and offers to stop when the call ends.
+- **Out to Slack in one step.** Copy a summary formatted for Slack, or post it to a channel through a webhook you set up.
+- **Private.** Speech recognition runs on the Neural Engine through Core ML; the summary runs in Ollama on `127.0.0.1`. No cloud API is called and no audio or text leaves the Mac, unless you choose **Send to Slack** for a summary.
 
 ```
 microphone ──────────────► echo canceller ─► Silero VAD ─► Parakeet Ultra ─► "Me"   ┐
@@ -71,7 +73,35 @@ Everything is saved as you go:
 
 If you leave the title empty, the call is named after the meeting app that is running (e.g. `zoom-call`) and renamed after the title the summary proposes. **Regenerate Summary** re-runs the summary for the last call, for example with a different model.
 
-**Settings (⌘,)**: system-audio source, microphone, echo handling, raw audio, speech model, speaker separation, summary model, calls folder.
+**Settings (⌘,)**: call prompts, open at login, Slack webhook, system-audio source, microphone, echo handling, raw audio, speech model, speaker separation, summary model, calls folder.
+
+### Call prompts
+
+While Earshot is running (its window can be closed; it stays in the menu bar), it notices when a meeting app joins a call and shows a card in the top-right corner of the screen: **Start transcribing?** with *Transcribe* and *Not now*. The card does not take focus from the call and goes away by itself after 30 seconds. When the call you are recording ends, a second card offers **Stop & summarize**; ignoring it keeps the recording going.
+
+- Watched apps: Zoom, Slack (huddles and calls), Microsoft Teams, Discord, Webex, FaceTime. Calls in a browser tab (Google Meet) are not detected; press Record for those.
+- How it works: every two seconds Earshot asks Core Audio which processes are capturing audio. A watched app holding the microphone for two seconds counts as joining a call; releasing it for six seconds counts as leaving. This needs no extra permission and reads no audio.
+- Anything else that makes one of those apps open the microphone (recording a Slack audio clip, Zoom's microphone test) also triggers the card.
+- Turn it off in Settings › Calls. **Open Earshot when I log in** (same place) keeps it running so that prompts appear without opening the app first.
+
+### Export and Slack
+
+**Export** on a finished call offers:
+
+| Action | What you get |
+|---|---|
+| **Copy for Slack** (⇧⌘C) | The summary on the clipboard as rich text that Slack's message box keeps (bold headings, bullets), with Slack markup (`*bold*`, `•`) as the plain-text form. Empty sections and the local file link are left out. |
+| **Send to Slack** | Posts the summary to one channel through a Slack incoming webhook. |
+| **Copy summary** | Rich text for documents, notes and mail; Markdown as the plain-text form. |
+| **Copy transcript** | Every line as `[00:12] Them 2: …`. |
+
+To set up **Send to Slack**: at [api.slack.com/apps](https://api.slack.com/apps) create an app for your workspace, switch on *Incoming Webhooks*, add a webhook for the channel, and paste its URL (`https://hooks.slack.com/services/…`) into Settings › Slack. *Send a test message* checks it. The URL is stored in your login keychain. Only `hooks.slack.com` addresses are accepted, and nothing is sent until you choose Send to Slack for a specific call; that post is the only network request Earshot makes beyond `127.0.0.1`.
+
+### Managing calls
+
+- **Search** on the home screen matches titles, summaries and transcript text.
+- **Rename** a call by clicking its title; the folder and both files follow.
+- **Delete** with the trash button on a call (click twice) or *Move to Trash* in a call's right-click menu. Calls go to the macOS Trash and can be put back.
 
 ### Headphones or speakers
 
@@ -204,8 +234,9 @@ scripts/score.py /tmp/earshot-test/*/transcript.md test-artifacts/reference.json
 Package.swift                 Swift package: EarshotCore (library), Earshot (app), earshot-cli
 Sources/EarshotCore/Audio     capture: process tap, device input (mic / BlackHole), resampling, timeline alignment
 Sources/EarshotCore/Speech    models, VAD + Parakeet streaming transcriber, Sortformer speakers, echo canceller
-Sources/EarshotCore/Session   call session, transcript + folder format, Ollama summarizer
-Sources/Earshot               SwiftUI app (window, menu bar, settings; Theme.swift holds colours and type)
+Sources/EarshotCore/Session   call session, transcript + folder format, Ollama summarizer, export (Slack markup, webhook)
+Sources/EarshotCore/Detection which meeting apps hold the microphone, and the joined / ended state machine
+Sources/Earshot               SwiftUI app (window, menu bar, settings, call prompt card; Theme.swift holds colours and type)
 Sources/earshot-cli           headless CLI and test harness
 Tests/EarshotCoreTests        unit tests
 scripts/build-app.sh          builds and signs build/Earshot.app
@@ -229,6 +260,8 @@ To release: open a pull request from `dev` into `prod` and merge it with a merge
 - **My words show up under "Them" or theirs under "Me".** "Them" is whatever the Mac plays; "Me" is whatever the microphone hears. On speakers, keep echo cancellation on. Other audio playing on the Mac during a call (music, videos) is transcribed as "Them".
 - **Summary failed.** Ollama was not reachable or the model is missing. Run `ollama serve`, then press **Regenerate Summary**. The transcript is always saved regardless.
 - **First start is slow.** The first launch after setup or a macOS update compiles the models for the Neural Engine (up to a minute). Later launches take a few seconds.
+- **No "Start transcribing?" card.** Earshot must be running (menu bar icon), and Settings › Calls › *Offer to transcribe when I join a call* must be on. The log records `call joined: <app>` whenever a call is noticed.
+- **Send to Slack failed.** The warning says why. A removed or revoked webhook has to be created again in Slack and pasted into Settings › Slack.
 - **Logs:** `~/Library/Logs/Earshot/earshot.log` (timings and errors only, never transcript text).
 
 ## Limits
@@ -237,6 +270,7 @@ To release: open a pull request from `dev` into `prod` and merge it with a merge
 - Speaker separation distinguishes at most four remote voices and can mislabel short interjections. "Me" vs "Them" does not depend on it.
 - Two people talking at once on the same side are transcribed as one stream.
 - The first words after pressing Record can be clipped if someone is mid-sentence.
+- A new recording cannot start while the previous call is still being summarized. Accepting a call prompt during that time starts recording as soon as the summary is done.
 
 ## License
 
