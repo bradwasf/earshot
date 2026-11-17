@@ -18,6 +18,8 @@ system audio (Core Audio tap) ──┴─────────► Silero VAD
                                 └─────────► Sortformer (who is speaking: Them 1/2/…)
 ```
 
+**Just want to use it?** Download [Earshot.dmg](https://github.com/bradwasf/earshot/releases/latest/download/Earshot.dmg) and follow [SETUP.md](SETUP.md); no developer tools needed. The rest of this page is for building Earshot from source.
+
 ## Requirements
 
 - Apple Silicon Mac, macOS 14.4 or newer (built and tested on an M5 Pro, macOS 27.2)
@@ -240,6 +242,8 @@ Sources/Earshot               SwiftUI app (window, menu bar, settings, call prom
 Sources/earshot-cli           headless CLI and test harness
 Tests/EarshotCoreTests        unit tests
 scripts/build-app.sh          builds and signs build/Earshot.app
+scripts/package.sh            builds dist/Earshot-<version>.dmg for other people, optionally as a GitHub release
+SETUP.md                      install guide for people who receive the disk image
 scripts/make-icon.swift       draws Resources/AppIcon.png
 scripts/make-test-call.py     generates the scripted test call
 scripts/score.py              word error rate + speaker-label scoring
@@ -252,6 +256,20 @@ setup.sh                      one-shot setup
 - **`prod`** is what is considered released. It only changes through a pull request from `dev`. Run `swift test` before releasing.
 
 To release: open a pull request from `dev` into `prod` and merge it with a merge commit (not squash), so the two branches keep a shared history.
+
+## Packaging for other people
+
+```bash
+scripts/package.sh             # builds dist/Earshot-<version>.dmg
+scripts/package.sh --release   # also publishes it as GitHub release v<version>
+```
+
+The disk image holds the app, a shortcut to Applications and [SETUP.md](SETUP.md) as "Read Me First.txt". Recipients need no developer tools: the app downloads the speech models on first launch and pulls the summary model through Ollama on the first summary.
+
+- **Version:** `CFBundleShortVersionString` in `Resources/Info.plist`. Bump it before each release (`--release` refuses to reuse an existing tag), or override it for one run with `EARSHOT_VERSION=1.1`.
+- **`--release`** needs the GitHub CLI (`gh auth login`), a clean working tree and the commit pushed. It uploads the image as `Earshot.dmg`, so `https://github.com/bradwasf/earshot/releases/latest/download/Earshot.dmg` (the link in SETUP.md) always fetches the newest release.
+- **Signing:** ad-hoc by default, which means recipients approve the app once in System Settings (SETUP.md, step 3) and macOS asks for the permissions again after each update. The *Apple Development* certificate that `build-app.sh` uses locally is not used for the package: it does not satisfy Gatekeeper either, and it would put the developer's Apple ID e-mail into a public file.
+- **Removing the Gatekeeper step** needs a paid Apple Developer membership. With a *Developer ID Application* certificate in the keychain, `package.sh` signs with it and the hardened runtime (`Resources/Earshot.entitlements`); with `EARSHOT_NOTARY_PROFILE=<name>` (created once with `xcrun notarytool store-credentials <name>`) it also notarizes and staples the image. That path is written but has not been run yet.
 
 ## Troubleshooting
 
