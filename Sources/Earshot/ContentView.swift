@@ -33,8 +33,16 @@ struct ContentView: View {
                 .ignoresSafeArea(edges: .top)
                 .allowsHitTesting(false)
         }
+        .overlay(alignment: .bottom) {
+            if let toast = model.toast {
+                ToastView(toast: toast)
+                    .padding(.bottom, 54)
+                    .transition(.opacity.combined(with: .move(edge: .bottom)))
+            }
+        }
         .tint(Theme.me)
         .animation(.snappy(duration: 0.28), value: model.screen)
+        .animation(.snappy(duration: 0.22), value: model.toast)
         .onAppear {
             // `--show-settings` opens the settings window at launch (used for screenshots).
             if CommandLine.arguments.contains("--show-settings") { openSettings() }
@@ -97,11 +105,7 @@ struct HeaderView: View {
                 .foregroundStyle(Theme.ink)
                 .lineLimit(1)
         case .call:
-            Text(model.document?.title ?? "Call")
-                .font(.ui(22, .semibold))
-                .foregroundStyle(Theme.ink)
-                .lineLimit(2)
-                .textSelection(.enabled)
+            EditableTitle()
         }
     }
 
@@ -287,6 +291,15 @@ struct FooterView: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
             Spacer()
+            footerButtons.fixedSize().layoutPriority(1)
+        }
+        .padding(.horizontal, 24)
+        .padding(.vertical, 10)
+        .overlay(alignment: .top) { Rectangle().fill(Theme.hairline).frame(height: 1) }
+    }
+
+    private var footerButtons: some View {
+        HStack(spacing: 8) {
             switch model.screen {
             case .home:
                 SettingsLink { Label("Settings", systemImage: "slider.horizontal.3") }
@@ -302,11 +315,9 @@ struct FooterView: View {
                     .disabled(model.phase != .idle || (model.document?.turns.isEmpty ?? true))
                 Button { model.revealInFinder() } label: { Label("Show in Finder", systemImage: "folder") }
                     .buttonStyle(GhostButtonStyle())
+                TrashButton()
             }
         }
-        .padding(.horizontal, 24)
-        .padding(.vertical, 10)
-        .overlay(alignment: .top) { Rectangle().fill(Theme.hairline).frame(height: 1) }
     }
 }
 
@@ -331,9 +342,22 @@ struct HomeView: View {
         } else {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 10) {
-                    Eyebrow(text: "Recent calls").padding(.leading, 2).padding(.bottom, 2)
-                    ForEach(model.library) { call in
-                        CallRow(call: call) { model.open(call) }
+                    HStack(spacing: 12) {
+                        Eyebrow(text: "Recent calls").padding(.leading, 2)
+                        Spacer(minLength: 8)
+                        SearchField(text: $model.search)
+                    }
+                    .padding(.bottom, 2)
+                    let calls = model.visibleLibrary
+                    ForEach(calls) { call in
+                        CallRow(call: call, open: { model.open(call) }, trash: { model.trash(call.folder) })
+                    }
+                    if calls.isEmpty {
+                        Text("No calls mention “\(model.search.trimmingCharacters(in: .whitespaces))”.")
+                            .font(.reading(14))
+                            .foregroundStyle(Theme.inkSoft)
+                            .frame(maxWidth: .infinity)
+                            .padding(.top, 28)
                     }
                 }
                 .padding(.horizontal, 24)
@@ -410,7 +434,8 @@ struct Hint: View {
 
 struct CallRow: View {
     let call: SavedCall
-    let action: () -> Void
+    let open: () -> Void
+    let trash: () -> Void
     @State private var hovering = false
 
     private static let formatter: DateFormatter = {
@@ -422,7 +447,7 @@ struct CallRow: View {
     }()
 
     var body: some View {
-        Button(action: action) {
+        Button(action: open) {
             HStack(alignment: .top, spacing: 14) {
                 VStack(alignment: .leading, spacing: 5) {
                     Text(call.title)
@@ -467,7 +492,10 @@ struct CallRow: View {
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
         .contextMenu {
+            Button("Open") { open() }
             Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([call.folder]) }
+            Divider()
+            Button("Move to Trash", role: .destructive) { trash() }
         }
     }
 }
@@ -602,9 +630,16 @@ struct CallView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            PillTabs(selection: $model.tab)
-                .padding(.top, 14)
-                .padding(.bottom, 4)
+            ZStack {
+                PillTabs(selection: $model.tab)
+                HStack {
+                    Spacer()
+                    ExportButton()
+                }
+                .padding(.horizontal, 24)
+            }
+            .padding(.top, 14)
+            .padding(.bottom, 4)
             switch model.tab {
             case .transcript: transcript
             case .summary: SummaryView()

@@ -15,6 +15,7 @@ enum Preference {
     static let diarization = "diarization"
     static let summarize = "summarize"
     static let callsFolder = "callsFolder"
+    static let detectCalls = "detectCalls"
 
     static func register() {
         UserDefaults.standard.register(defaults: [
@@ -28,6 +29,7 @@ enum Preference {
             diarization: true,
             summarize: true,
             callsFolder: CallFolder.defaultRoot.path,
+            detectCalls: true,
         ])
     }
 }
@@ -72,6 +74,23 @@ struct CallDocument: Equatable {
     var detail: String
     var turns: [DisplayTurn]
     var summary: String?
+}
+
+/// A short confirmation shown at the bottom of the window ("Copied — paste it into Slack").
+struct Toast: Equatable {
+    let id = UUID()
+    let text: String
+    var symbol = "checkmark.circle.fill"
+}
+
+/// What the floating prompt in the corner of the screen is asking.
+enum CallPrompt: Equatable {
+    /// A meeting app joined a call: offer to transcribe it.
+    case join(CallApp)
+    /// The call being recorded seems to be over: offer to stop.
+    case ended(CallApp)
+    /// Confirmation after accepting `join`.
+    case transcribing(CallApp)
 }
 
 /// Rolling input levels for the waveform ribbon. Kept apart from `AppModel` so that twenty-odd
@@ -147,6 +166,12 @@ final class AppModel: ObservableObject {
     @Published var status = ""
     @Published var heardSystemAudio = false
     @Published var installedSummaryModels: [String] = []
+    /// Filters the list of recent calls.
+    @Published var search = ""
+    @Published var toast: Toast?
+    /// True when a Slack webhook is saved, so "Send to Slack" can post.
+    @Published var slackReady = false
+    @Published var sendingToSlack = false
 
     let meter = MeterModel()
 
@@ -160,6 +185,10 @@ final class AppModel: ObservableObject {
     /// Loudest input level seen per channel during the current call (for the diagnostics log).
     private var peakLevels: [Channel: Float] = [:]
     private var exitWhenDone = false
+    private var detector = CallDetector()
+    private var watchTimer: Timer?
+    private var toastTask: Task<Void, Never>?
+    let promptPanel = PromptPanelController()
 
     var isRecording: Bool { phase == .recording }
     var isBusy: Bool {
@@ -179,6 +208,8 @@ final class AppModel: ObservableObject {
         refreshLibrary()
         Task { await loadModels() }
         Task { await refreshSummaryModels() }
+        slackReady = SlackSettings.webhookURL != nil
+        startWatchingForCalls()
     }
 
     // MARK: - Models
@@ -236,6 +267,12 @@ final class AppModel: ObservableObject {
         screen = .call
     }
 
+    /// Recent calls narrowed by the search field.
+    var visibleLibrary: [SavedCall] {
+        let query = search.trimmingCharacters(in: .whitespaces)
+        return query.isEmpty ? library : library.filter { $0.matches(query) }
+    }
+
     func goHome() {
         guard !isRecording else { return }
         document = nil
@@ -271,10 +308,12 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func start() async {
+    /// `placeholder` names the call until the summary proposes a title ("Slack huddle").
+    func start(placeholder: String? = nil) async {
         await loadModels()
         guard phase == .idle, let models else { return }
         phase = .starting
+        if case .join = promptPanel.current { promptPanel.dismiss() }
         let defaults = UserDefaults.standard
 
         // Microphone permission (the system-audio prompt appears when the tap opens).
@@ -306,7 +345,7 @@ final class AppModel: ObservableObject {
         let typedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
         let microphoneUID = defaults.string(forKey: Preference.microphone).flatMap { $0.isEmpty || $0 == "off" ? nil : $0 }
         let config = SessionConfig(
-            title: typedTitle.isEmpty ? Self.placeholderTitle() : typedTitle,
+            title: typedTitle.isEmpty ? (placeholder ?? Self.placeholderTitle()) : typedTitle,
             titleIsPlaceholder: typedTitle.isEmpty,
             root: callsRoot,
             systemAudio: systemAudio,
@@ -360,6 +399,7 @@ final class AppModel: ObservableObject {
     func stop() async {
         guard phase == .recording, let session else { return }
         phase = .finishing("Finishing transcript…")
+        if case .ended = promptPanel.current { promptPanel.dismiss() }
         timer?.invalidate()
         timer = nil
         guard var result = await session.stop() else {
@@ -455,6 +495,187 @@ final class AppModel: ObservableObject {
         }
     }
 
+    // MARK: - Editing saved calls
+
+    /// Retitles the call on screen (headings in both files, and the folder name).
+    func renameCurrentCall(to newTitle: String) {
+        let title = newTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard phase == .idle, let current = document, !title.isEmpty, title != current.title else { return }
+        do {
+            let folder = try CallLibrary.rename(folder: current.folder, to: title)
+            document?.folder = folder
+            document?.title = title
+            document?.summary = CallLibrary.summary(folder: folder)
+            refreshLibrary()
+            show(Toast(text: "Renamed"))
+        } catch {
+            warnings.append("Could not rename the call: \(error.localizedDescription)")
+        }
+    }
+
+    /// Moves a saved call to the Trash.
+    func trash(_ folder: URL) {
+        guard phase == .idle || document?.folder != folder else { return }
+        do {
+            try CallLibrary.trash(folder: folder)
+            if document?.folder == folder {
+                document = nil
+                screen = .home
+            }
+            library.removeAll { $0.folder == folder }
+            refreshLibrary()
+            show(Toast(text: "Moved to the Trash", symbol: "trash.fill"))
+        } catch {
+            warnings.append("Could not move the call to the Trash: \(error.localizedDescription)")
+        }
+    }
+
+    // MARK: - Export
+
+    enum ExportKind {
+        case slack, markdown, transcript
+    }
+
+    /// The summary on screen, ready to export (nil while there is no usable summary).
+    var summaryExport: SummaryExport? {
+        guard let document, let summary = document.summary else { return nil }
+        return SummaryExport(summaryMarkdown: summary, title: document.title, detail: document.detail)
+    }
+
+    var canExportTranscript: Bool { !(document?.turns.isEmpty ?? true) }
+
+    func copy(_ kind: ExportKind) {
+        let pasteboard = NSPasteboard.general
+        switch kind {
+        case .slack:
+            guard let export = summaryExport else { return }
+            pasteboard.clearContents()
+            // Slack's composer keeps the rich text; where it pastes as plain text, the fallback
+            // is already in Slack's own markup.
+            pasteboard.setString("<meta charset=\"utf-8\">" + export.html(.slack), forType: .html)
+            pasteboard.setString(export.slackText, forType: .string)
+            show(Toast(text: "Summary copied — paste it into Slack"))
+        case .markdown:
+            guard let export = summaryExport else { return }
+            pasteboard.clearContents()
+            pasteboard.setString("<meta charset=\"utf-8\">" + export.html(.document), forType: .html)
+            pasteboard.setString(export.markdown, forType: .string)
+            show(Toast(text: "Summary copied"))
+        case .transcript:
+            guard let document, !document.turns.isEmpty else { return }
+            let lines = document.turns.map { "[\($0.time)] \($0.label): \($0.text)" }
+            pasteboard.clearContents()
+            pasteboard.setString(([document.title, document.detail, ""] + lines).joined(separator: "\n"), forType: .string)
+            show(Toast(text: "Transcript copied"))
+        }
+    }
+
+    /// Posts the summary on screen to the saved Slack webhook.
+    func sendToSlack() {
+        guard !sendingToSlack, let export = summaryExport, let url = SlackSettings.webhookURL else { return }
+        sendingToSlack = true
+        Task {
+            do {
+                try await SlackWebhook.send(export, to: url, session: SlackSettings.session)
+                show(Toast(text: "Posted to Slack", symbol: "paperplane.fill"))
+                Log.write("summary posted to Slack")
+            } catch {
+                warnings.append(error.localizedDescription)
+                Log.write("Slack post failed: \(error.localizedDescription)")
+            }
+            sendingToSlack = false
+        }
+    }
+
+    func show(_ toast: Toast) {
+        self.toast = toast
+        toastTask?.cancel()
+        toastTask = Task {
+            try? await Task.sleep(nanoseconds: 2_400_000_000)
+            if !Task.isCancelled, self.toast == toast { self.toast = nil }
+        }
+    }
+
+    // MARK: - Call detection
+
+    /// Polls Core Audio for meeting apps holding the microphone. This reads which processes
+    /// capture audio, never the audio itself, and needs no permission.
+    private func startWatchingForCalls() {
+        let timer = Timer(timeInterval: 2, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.checkForCalls() }
+        }
+        timer.tolerance = 0.5
+        RunLoop.main.add(timer, forMode: .common)
+        watchTimer = timer
+    }
+
+    private func checkForCalls() {
+        guard UserDefaults.standard.bool(forKey: Preference.detectCalls) else {
+            if !detector.active.isEmpty || promptPanel.current != nil {
+                detector.reset()
+                promptPanel.dismiss()
+            }
+            return
+        }
+        let apps = MicrophoneActivity.callAppsCapturingAudio(apps: watchedApps)
+        for event in detector.update(using: apps, now: ProcessInfo.processInfo.systemUptime) {
+            switch event {
+            case .joined(let app):
+                Log.write("call joined: \(app.id)")
+                // One offer per call, and none while a recording is already running.
+                if !isRecording && phase != .starting { present(.join(app)) }
+            case .ended(let app):
+                Log.write("call ended: \(app.id)")
+                if promptPanel.current == .join(app) { promptPanel.dismiss() }
+                if isRecording && detector.active.isEmpty { present(.ended(app)) }
+            }
+        }
+    }
+
+    private func present(_ prompt: CallPrompt) {
+        promptPanel.show(prompt, model: self)
+        guard autoAcceptPrompts else { return }
+        Task {
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            guard promptPanel.current == prompt else { return }
+            switch prompt {
+            case .join(let app): acceptCall(app)
+            case .ended: acceptCallEnded()
+            case .transcribing: break
+            }
+        }
+    }
+
+    /// "Transcribe" on the join prompt.
+    func acceptCall(_ app: CallApp) {
+        promptPanel.show(.transcribing(app), model: self)
+        Task {
+            // A previous call may still be summarizing; recording starts as soon as that is done.
+            var waited = 0.0
+            while isBusy, waited < 600 {
+                try? await Task.sleep(nanoseconds: 250_000_000)
+                waited += 0.25
+            }
+            if phase == .idle {
+                if screen == .call { title = "" }
+                await start(placeholder: app.callName)
+            }
+            if !isRecording {
+                // Something went wrong (shown as a warning in the window): bring it forward.
+                promptPanel.dismiss()
+                NSApp.activate(ignoringOtherApps: true)
+            }
+        }
+    }
+
+    /// "Stop & summarize" on the call-ended prompt.
+    func acceptCallEnded() {
+        promptPanel.dismiss()
+        Task { await stop() }
+    }
+
+    private var watchedApps: [CallApp] { CallApp.known + extraWatchedApps }
+
     // MARK: - Events
 
     private func handle(_ event: SessionEvent) {
@@ -513,7 +734,12 @@ final class AppModel: ObservableObject {
 
     // Launch arguments used by the end-to-end test:
     //   --autostart --stop-after 60 --title "X" --exit-when-done --appearance light|dark --open-latest
+    //   --watch-app <bundle-id-prefix>   also treat that app as a meeting app (tests the detector)
+    //   --simulate-prompt join|ended|transcribing   show the floating prompt at launch (screenshots)
     private var autoStart = false
+    //   --accept-prompts                 answer every prompt with its main button (end-to-end test)
+    private var extraWatchedApps: [CallApp] = []
+    private var autoAcceptPrompts = false
 
     private func parseLaunchArguments() {
         let arguments = CommandLine.arguments
@@ -524,6 +750,18 @@ final class AppModel: ObservableObject {
         }
         if let index = arguments.firstIndex(of: "--title"), index + 1 < arguments.count {
             title = arguments[index + 1]
+        }
+        autoAcceptPrompts = arguments.contains("--accept-prompts")
+        if let index = arguments.firstIndex(of: "--watch-app"), index + 1 < arguments.count {
+            extraWatchedApps = [CallApp(id: "test", name: "Test", callName: "Test call", bundlePrefixes: [arguments[index + 1]])]
+        }
+        if let index = arguments.firstIndex(of: "--simulate-prompt"), index + 1 < arguments.count {
+            let kind = arguments[index + 1]
+            let app = CallApp.known.first { $0.id == (arguments.dropFirst(index + 2).first ?? "slack") } ?? CallApp.known[1]
+            Task {
+                try? await Task.sleep(nanoseconds: 1_200_000_000)
+                promptPanel.show(kind == "ended" ? .ended(app) : kind == "transcribing" ? .transcribing(app) : .join(app), model: self)
+            }
         }
         if arguments.contains("--open-latest") {
             if let latest = CallLibrary.list(root: callsRoot).first { open(latest) }
