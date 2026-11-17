@@ -2,8 +2,6 @@
 
 # Earshot
 
-[![CI](https://github.com/bradwasf/earshot/actions/workflows/ci.yml/badge.svg?branch=dev)](https://github.com/bradwasf/earshot/actions/workflows/ci.yml)
-
 A fully local macOS app that live-transcribes the calls you join and summarizes them afterwards.
 
 - **Both sides, separately.** Your microphone is labelled **Me**; the Mac's audio (Zoom, Meet, Teams, FaceTime, anything) is labelled **Them**, with remote speakers told apart as *Them 1*, *Them 2*… when there is more than one.
@@ -215,13 +213,12 @@ scripts/make-icon.swift       draws Resources/AppIcon.png
 scripts/make-test-call.py     generates the scripted test call
 scripts/score.py              word error rate + speaker-label scoring
 setup.sh                      one-shot setup
-.github/workflows/ci.yml      builds and runs the unit tests on every push and pull request
 ```
 
 ## Branches
 
 - **`dev`** is the default branch. Day-to-day work lands here, directly or through pull requests.
-- **`prod`** is what is considered released. It only changes through a pull request from `dev`, and CI has to pass first.
+- **`prod`** is what is considered released. It only changes through a pull request from `dev`. Run `swift test` before releasing.
 
 To release: open a pull request from `dev` into `prod` and merge it with a merge commit (not squash), so the two branches keep a shared history.
 
