@@ -1,0 +1,24 @@
+name: Feature request
+description: Suggest an improvement or a new feature.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you trying to do that Earshot makes hard today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you'd like
+      description: How you picture it working. Earshot stays fully local, so ideas that need a cloud service are out of scope.
+    validations:
+      required: true
+  - type: checkboxes
+    id: contribute
+    attributes:
+      label: Contributing
+      options:
+        - label: I'd like to open a pull request for this myself.

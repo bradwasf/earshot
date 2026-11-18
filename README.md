@@ -250,10 +250,14 @@ scripts/score.py              word error rate + speaker-label scoring
 setup.sh                      one-shot setup
 ```
 
+## Contributing
+
+Contributions are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) first: fork the repo, branch from `dev`, and open a pull request against `dev`. The maintainer reviews and merges every pull request. Please follow the [Code of Conduct](CODE_OF_CONDUCT.md), and report security problems privately as described in [SECURITY.md](SECURITY.md).
+
 ## Branches
 
-- **`dev`** is the default branch. Day-to-day work lands here, directly or through pull requests.
-- **`prod`** is what is considered released. It only changes through a pull request from `dev`. Run `swift test` before releasing.
+- **`dev`** is the default branch. Day-to-day work lands here. Contributors' pull requests target `dev`.
+- **`prod`** is what is considered released. It only changes through a pull request from `dev`. Run `swift test` before releasing. CI (`.github/workflows/ci.yml`) runs `swift build` and `swift test` on every push and pull request to either branch.
 
 To release: open a pull request from `dev` into `prod` and merge it with a merge commit (not squash), so the two branches keep a shared history.
 

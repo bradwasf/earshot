@@ -119,7 +119,7 @@ After an update, macOS treats Earshot as a new app: you approve it again as in s
 - **"Summary failed" or "Ollama is not running".** Open the Ollama app (llama icon in the menu bar), then click **Regenerate Summary**. Your transcript is always saved either way.
 - **The summary model download stopped.** Click **Regenerate Summary**; it picks up where it left off.
 - **Earshot is slow to open after a macOS update.** It is preparing the speech models again. This takes up to a minute, once.
-- **Still stuck?** Open an issue on GitHub and attach the file `earshot.log`. In Finder choose Go › Go to Folder and enter `~/Library/Logs/Earshot`. The log holds timings and error messages only, never what was said.
+- **Still stuck?** Open an issue at https://github.com/bradwasf/earshot/issues and attach the file `earshot.log`. To find it, in Finder choose Go › Go to Folder and enter `~/Library/Logs/Earshot`. The log holds timings and error messages only, never what was said, but read it before you post it.
 
 ## Removing Earshot
 

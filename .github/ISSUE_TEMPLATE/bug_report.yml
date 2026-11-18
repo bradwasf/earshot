@@ -1,0 +1,60 @@
+name: Bug report
+description: Something in Earshot doesn't work as described.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Don't paste transcripts, summaries or audio from real calls.** They contain other people's words. Security problems go through private reporting (see SECURITY.md).
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Join a Zoom call on speakers
+        2. Press Record
+        3. ...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Earshot version
+      description: From the release you downloaded, or the commit you built.
+    validations:
+      required: true
+  - type: input
+    id: mac
+    attributes:
+      label: Mac and macOS version
+      placeholder: MacBook Air M2, 16 GB, macOS 15.3
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Capture (Me / Them audio)
+        - Transcription
+        - Speaker separation
+        - Summary (Ollama)
+        - Call prompts
+        - Export / Slack
+        - Install / permissions
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Log excerpt
+      description: The relevant lines of ~/Library/Logs/Earshot/earshot.log (timings and errors only, never transcript text).
+      render: text
