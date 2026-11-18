@@ -440,3 +440,22 @@ final class CallLibraryEditingTests: XCTestCase {
         XCTAssertFalse(call.matches("budget mango"))
     }
 }
+
+final class GrokBotLinkTests: XCTestCase {
+    func testPromptIsOneEncodedLine() throws {
+        let url = try XCTUnwrap(GrokBotLink.prompt("Call \"A+B\" & more\nTranscript: /tmp/x y/transcript.md\u{200B}"))
+        let text = url.absoluteString
+        XCTAssertTrue(text.hasPrefix("grokbot://app/v1/prompt?text="))
+        XCTAssertFalse(text.contains("%0A"))
+        XCTAssertTrue(text.contains("%2B") && text.contains("%26"))
+        let decoded = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first?.value
+        XCTAssertEqual(decoded, "Call \"A+B\" & more Transcript: /tmp/x y/transcript.md")
+        print("GROKURL " + text)
+    }
+
+    func testCapsLength() throws {
+        let url = try XCTUnwrap(GrokBotLink.prompt(String(repeating: "a", count: 5_000)))
+        let decoded = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first?.value
+        XCTAssertEqual(decoded?.count, GrokBotLink.maxPromptLength)
+    }
+}

@@ -293,3 +293,24 @@ public enum SlackWebhook {
         }
     }
 }
+
+/// Builds `grokbot://app/v1/prompt?text=…` links, which open Grok Bot with a prompt filled in.
+public enum GrokBotLink {
+    /// Grok Bot rejects prompts longer than this (decoded characters).
+    public static let maxPromptLength = 1_000
+
+    public static func prompt(_ text: String) -> URL? {
+        // Grok Bot blocks prompts containing invisible format characters, so drop them.
+        let cleaned = String(String.UnicodeScalarView(text.unicodeScalars.filter {
+            $0.properties.generalCategory != .format && !$0.properties.isDefaultIgnorableCodePoint
+        }))
+        // Grok Bot silently drops links whose text has line breaks, so send a single line.
+        let oneLine = cleaned.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
+        let trimmed = String(oneLine.prefix(maxPromptLength))
+        guard !trimmed.isEmpty else { return nil }
+        // Encode everything but unreserved characters, so "+" and "&" survive URLSearchParams.
+        let unreserved = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
+        guard let encoded = trimmed.addingPercentEncoding(withAllowedCharacters: unreserved) else { return nil }
+        return URL(string: "grokbot://app/v1/prompt?text=\(encoded)")
+    }
+}
