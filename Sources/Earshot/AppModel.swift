@@ -587,6 +587,28 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// True when the Grok Bot app is installed (it handles `grokbot://` links).
+    var grokBotInstalled: Bool {
+        NSWorkspace.shared.urlForApplication(toOpen: URL(string: "grokbot://app/v1/open")!) != nil
+    }
+
+    /// Opens Grok Bot with a prompt about this call. Its deep link caps the prompt at 1,000
+    /// characters, so the prompt points at the call's saved transcript.md and summary.md
+    /// rather than carrying the whole transcript.
+    func sendToGrokBot() {
+        guard let document, canExportTranscript else { return }
+        let transcript = document.folder.appendingPathComponent("transcript.md").path
+        let summary = document.folder.appendingPathComponent("summary.md")
+        var lines = ["Here is a call I transcribed with Earshot: \"\(document.title)\" (\(document.detail))."]
+        lines.append("Full transcript, with speakers and times: \(transcript)")
+        if document.summary != nil { lines.append("Summary: \(summary.path)") }
+        lines.append("Read them, then help me with follow-ups from this call.")
+        guard let url = GrokBotLink.prompt(lines.joined(separator: " ")) else { return }
+        NSWorkspace.shared.open(url)
+        show(Toast(text: "Opened in Grok Bot", symbol: "paperplane.fill"))
+        Log.write("call sent to Grok Bot")
+    }
+
     func show(_ toast: Toast) {
         self.toast = toast
         toastTask?.cancel()
@@ -738,6 +760,7 @@ final class AppModel: ObservableObject {
     //   --simulate-prompt join|ended|transcribing   show the floating prompt at launch (screenshots)
     private var autoStart = false
     //   --accept-prompts                 answer every prompt with its main button (end-to-end test)
+    //   --send-to-grok                   with --open-latest, run Export › Send to Grok Bot at launch
     private var extraWatchedApps: [CallApp] = []
     private var autoAcceptPrompts = false
 
@@ -766,6 +789,12 @@ final class AppModel: ObservableObject {
         if arguments.contains("--open-latest") {
             if let latest = CallLibrary.list(root: callsRoot).first { open(latest) }
             if arguments.contains("--transcript") { tab = .transcript }
+            if arguments.contains("--send-to-grok") {
+                Task {
+                    try? await Task.sleep(nanoseconds: 1_500_000_000)
+                    sendToGrokBot()
+                }
+            }
         }
     }
 }

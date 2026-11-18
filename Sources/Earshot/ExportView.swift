@@ -57,6 +57,16 @@ private struct ExportMenu: View {
                 if model.slackReady { model.sendToSlack() } else { openSettings() }
                 close()
             }
+            ExportRow(
+                symbol: "sparkles", tint: Theme.tone(2), title: "Send to Grok Bot",
+                detail: !model.grokBotInstalled
+                    ? "Grok Bot isn’t installed"
+                    : model.canExportTranscript ? "Open the transcript in a new prompt" : "There is no transcript yet",
+                enabled: model.grokBotInstalled && model.canExportTranscript
+            ) {
+                model.sendToGrokBot()
+                close()
+            }
             Rectangle().fill(Theme.hairline).frame(height: 1).padding(.vertical, 4).padding(.horizontal, 8)
             ExportRow(
                 symbol: "doc.on.doc.fill", tint: Theme.me, title: "Copy summary",
