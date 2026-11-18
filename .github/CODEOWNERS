@@ -1,3 +1,2 @@
-# The maintainer reviews every change. With "Require review from Code Owners" turned on
-# in branch protection, no pull request can merge without @bradwasf's approval.
+# Every pull request automatically requests a review from the maintainer.
 * @bradwasf

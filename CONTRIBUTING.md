@@ -4,7 +4,7 @@ Thanks for helping. Bug reports, fixes, docs and new features are all welcome. T
 
 ## How the project is run
 
-Earshot has one maintainer ([@bradwasf](https://github.com/bradwasf)), who reviews and merges every pull request. Only the maintainer can push to this repository. Everyone else contributes from a fork. The maintainer decides what is merged and may close changes that don't fit the project's direction. Two things are fixed: Earshot stays fully local (no cloud APIs, and nothing leaves the Mac unless the user chooses an export), and it stays a single native macOS app.
+Earshot has one maintainer ([@bradwasf](https://github.com/bradwasf)), who reviews and merges every pull request. Only the maintainer can push to this repository or merge pull requests. Everyone else contributes from a fork, and every pull request automatically requests the maintainer's review (`.github/CODEOWNERS`). The maintainer decides what is merged and may close changes that don't fit the project's direction. Two things are fixed: Earshot stays fully local (no cloud APIs, and nothing leaves the Mac unless the user chooses an export), and it stays a single native macOS app.
 
 For anything larger than a small fix, **open an issue first** and describe what you want to change, so you don't spend time on something that won't be merged.
 
