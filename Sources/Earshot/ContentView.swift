@@ -14,7 +14,7 @@ struct ContentView: View {
                 switch model.screen {
                 case .home: HomeView()
                 case .live: LiveView()
-                case .call: CallView()
+                case .call: CallView().environmentObject(model.reader)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -582,13 +582,21 @@ struct LiveView: View {
 struct TurnView: View {
     let turn: DisplayTurn
     var live = false
+    /// Find highlights, playback and naming for a saved call's turn.
+    var reading: TurnReading?
     @State private var pulse = false
+    @State private var hovering = false
 
     var body: some View {
         let tone = Theme.tone(turn.tone)
+        let playing = reading?.playing ?? false
         VStack(alignment: .leading, spacing: 5) {
             HStack(spacing: 7) {
-                Eyebrow(text: turn.label, color: tone)
+                if let rename = reading?.rename {
+                    SpeakerTag(turn: turn, color: tone, editing: rename)
+                } else {
+                    Eyebrow(text: turn.label, color: tone)
+                }
                 if live {
                     Circle()
                         .fill(tone)
@@ -598,9 +606,23 @@ struct TurnView: View {
                         .onAppear { pulse = true }
                 }
                 Spacer(minLength: 8)
-                Text(live ? "live" : turn.time).font(.stamp(10.5)).foregroundStyle(Theme.inkFaint)
+                if let play = reading?.play {
+                    Button(action: play) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "play.fill").font(.system(size: 8, weight: .bold))
+                                .opacity(hovering || playing ? 1 : 0)
+                            Text(turn.time).font(.stamp(10.5))
+                        }
+                        .foregroundStyle(hovering || playing ? Theme.me : Theme.inkFaint)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help("Play from here")
+                } else {
+                    Text(live ? "live" : turn.time).font(.stamp(10.5)).foregroundStyle(Theme.inkFaint)
+                }
             }
-            Text(turn.text)
+            Text(reading?.text ?? AttributedString(turn.text))
                 .font(.reading(15.5))
                 .lineSpacing(4.5)
                 .foregroundStyle(live ? Theme.inkSoft : Theme.ink)
@@ -612,14 +634,18 @@ struct TurnView: View {
         .padding(.vertical, 11)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous).fill(live ? tone.opacity(0.08) : Theme.surface)
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(live ? tone.opacity(0.08) : playing ? tone.opacity(0.06) : Theme.surface)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(live ? tone.opacity(0.28) : Theme.hairline)
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(live ? tone.opacity(0.28) : playing ? tone.opacity(0.35) : Theme.hairline)
         )
         .overlay(alignment: .leading) {
             Capsule().fill(tone).frame(width: 3).padding(.vertical, 11).padding(.leading, 6)
         }
+        .onHover { hovering = reading != nil && $0 }
+        .animation(.easeOut(duration: 0.2), value: playing)
     }
 }
 
@@ -627,6 +653,7 @@ struct TurnView: View {
 
 struct CallView: View {
     @EnvironmentObject private var model: AppModel
+    @EnvironmentObject private var reader: CallReader
 
     var body: some View {
         VStack(spacing: 0) {
@@ -640,11 +667,16 @@ struct CallView: View {
             }
             .padding(.top, 14)
             .padding(.bottom, 4)
+            if reader.findOpen { FindBar().transition(.opacity.combined(with: .move(edge: .top))) }
             switch model.tab {
             case .transcript: transcript
             case .summary: SummaryView()
             }
+            if reader.hasAudio { PlayerBar(player: reader.player, follow: $reader.follow) }
         }
+        .animation(.snappy(duration: 0.2), value: reader.findOpen)
+        // Closing the window leaves the call too.
+        .onDisappear { reader.player.pause() }
     }
 
     @ViewBuilder
@@ -659,14 +691,7 @@ struct CallView: View {
             .frame(maxWidth: 380, maxHeight: .infinity)
             .padding(28)
         } else {
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 10) {
-                    ForEach(turns) { TurnView(turn: $0) }
-                }
-                .padding(.horizontal, 24)
-                .padding(.vertical, 14)
-                .background(OverlayScrollers())
-            }
+            CallTranscript()
         }
     }
 }
