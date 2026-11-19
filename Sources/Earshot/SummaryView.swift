@@ -8,6 +8,8 @@ struct SummaryDocument {
         let name: String
         var items: [String]
         var prose: [String]
+        /// Line in summary.md of each item (to tick action items off in place).
+        var itemLines: [Int] = []
     }
 
     var overview: String = ""
@@ -19,7 +21,7 @@ struct SummaryDocument {
         var current: Int?
         var inOverview = false
         var afterRule = false
-        for raw in markdown.components(separatedBy: "\n") {
+        for (index, raw) in markdown.components(separatedBy: "\n").enumerated() {
             let line = raw.trimmingCharacters(in: .whitespaces)
             if line.isEmpty || line.hasPrefix("# ") { continue }
             if line == "---" {
@@ -44,6 +46,7 @@ struct SummaryDocument {
             } else if let current {
                 if line.hasPrefix("- ") || line.hasPrefix("* ") {
                     sections[current].items.append(String(line.dropFirst(2)))
+                    sections[current].itemLines.append(index)
                 } else {
                     sections[current].prose.append(line)
                 }
@@ -172,6 +175,19 @@ private struct SectionCard: View {
         section.items.allSatisfy { $0.lowercased().contains("none recorded") } && section.prose.isEmpty
     }
 
+    private func actionItem(_ index: Int) -> ActionItem {
+        let state = ActionItems.checkbox(section.items[index])
+        let line = index < section.itemLines.count ? section.itemLines[index] : -1
+        return ActionItem(line: line, done: state.done ?? false, text: state.text)
+    }
+
+    /// "3", or "1/3 done" once action items are being ticked off.
+    private var count: String {
+        guard kind == .actions else { return "\(section.items.count)" }
+        let done = section.items.indices.filter { actionItem($0).done }.count
+        return done == 0 ? "\(section.items.count)" : "\(done)/\(section.items.count) done"
+    }
+
     var body: some View {
         Card(padding: 16) {
             VStack(alignment: .leading, spacing: 11) {
@@ -180,7 +196,7 @@ private struct SectionCard: View {
                     Eyebrow(text: section.name, color: accent)
                     Spacer()
                     if !isEmpty && kind != .other {
-                        Text("\(section.items.count)").font(.stamp(10.5)).foregroundStyle(Theme.inkFaint)
+                        Text(count).font(.stamp(10.5)).foregroundStyle(Theme.inkFaint)
                     }
                 }
                 if isEmpty {
@@ -189,9 +205,9 @@ private struct SectionCard: View {
                     ForEach(section.prose, id: \.self) { line in
                         Text(inline(line)).font(.reading(14.5)).foregroundStyle(Theme.ink).lineSpacing(3)
                     }
-                    ForEach(Array(section.items.enumerated()), id: \.offset) { _, item in
+                    ForEach(Array(section.items.enumerated()), id: \.offset) { index, item in
                         if kind == .actions {
-                            ActionRow(item: item, accent: accent)
+                            ActionRow(item: actionItem(index), accent: accent)
                         } else {
                             HStack(alignment: .firstTextBaseline, spacing: 10) {
                                 Circle().fill(accent.opacity(0.75)).frame(width: 5, height: 5).offset(y: -2.5)
@@ -210,45 +226,30 @@ private struct SectionCard: View {
     }
 }
 
-/// "- [ ] **Owner** — task" as an owner chip plus the task.
+/// "- [ ] **Owner** — task" as a checkbox, an owner chip and the task. Ticking writes summary.md.
 private struct ActionRow: View {
-    let item: String
+    @EnvironmentObject private var model: AppModel
+    let item: ActionItem
     let accent: Color
 
-    private var parts: (owner: String?, task: String) {
-        var text = item
-        for prefix in ["[ ] ", "[x] ", "[X] "] where text.hasPrefix(prefix) { text = String(text.dropFirst(prefix.count)) }
-        guard text.hasPrefix("**"), let close = text.dropFirst(2).range(of: "**") else { return (nil, text) }
-        let owner = String(text[text.index(text.startIndex, offsetBy: 2)..<close.lowerBound])
-        var task = String(text[close.upperBound...]).trimmingCharacters(in: .whitespaces)
-        for dash in ["—", "–", "-", ":"] where task.hasPrefix(dash) {
-            task = String(task.dropFirst(dash.count)).trimmingCharacters(in: .whitespaces)
-            break
-        }
-        return (owner, task.prefix(1).uppercased() + task.dropFirst())
-    }
-
     var body: some View {
-        let parts = parts
-        HStack(alignment: .firstTextBaseline, spacing: 10) {
-            if let owner = parts.owner {
-                let unassigned = owner.lowercased() == "unassigned"
-                Text(owner)
-                    .font(.ui(11, .bold))
-                    .foregroundStyle(unassigned ? Theme.inkSoft : (owner == "Me" ? Theme.me : accent))
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 2.5)
-                    .background(
-                        Capsule().fill((unassigned ? Theme.inkFaint : (owner == "Me" ? Theme.me : accent)).opacity(0.14))
-                    )
-                    .fixedSize()
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            ActionCheckbox(done: item.done, tint: accent) {
+                guard let folder = model.document?.folder else { return }
+                model.setActionItem(item, in: folder, done: !item.done)
             }
-            Text(inline(parts.task))
-                .font(.reading(14.5))
-                .lineSpacing(3.5)
-                .foregroundStyle(Theme.ink)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .fixedSize(horizontal: false, vertical: true)
+            .disabled(!model.canEditActionItems || item.line < 0)
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                if let owner = item.owner { OwnerChip(owner: owner, accent: accent) }
+                Text(inline(item.task))
+                    .font(.reading(14.5))
+                    .lineSpacing(3.5)
+                    .foregroundStyle(item.done ? Theme.inkFaint : Theme.ink)
+                    .strikethrough(item.done, color: Theme.inkFaint)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .opacity(item.done ? 0.85 : 1)
         }
     }
 }

@@ -295,7 +295,7 @@ final class SummaryExportTests: XCTestCase {
         XCTAssertTrue(export.html(.document).contains("<h1>Launch Review</h1>"))
         XCTAssertTrue(export.html(.document).contains("<h2>Key points</h2>"))
         XCTAssertTrue(export.markdown.hasPrefix("# Launch Review\n\nThe launch moved to **December 10th**."))
-        XCTAssertTrue(export.markdown.contains("## Action items\n- **Them 2** — Update the press release by Friday.\n- **Me** — Tell leadership.\n"))
+        XCTAssertTrue(export.markdown.contains("## Action items\n- [ ] **Them 2** — Update the press release by Friday.\n- [ ] **Me** — Tell leadership.\n"))
     }
 
     func testWebhookPayloadRespectsSlackLimits() throws {

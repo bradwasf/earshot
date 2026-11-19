@@ -12,6 +12,10 @@ public struct SavedCall: Identifiable, Sendable, Equatable {
     public let overview: String?
     /// Lowercased title, summary and transcript, for searching.
     public let searchText: String
+    /// The action items of summary.md, ticked or not.
+    public var actionItems: [ActionItem] = []
+
+    public var openActionItems: [ActionItem] { actionItems.filter { !$0.done } }
 
     /// True when every word of `query` appears somewhere in the call.
     public func matches(_ query: String) -> Bool {
@@ -51,7 +55,8 @@ public enum CallLibrary {
                 date: values.creationDate ?? .distantPast,
                 duration: parsed.duration,
                 overview: summary.flatMap(overview(of:)),
-                searchText: ([title, summary ?? ""] + parsed.turns.map(\.text)).joined(separator: "\n").lowercased())
+                searchText: ([title, summary ?? ""] + parsed.turns.map(\.text)).joined(separator: "\n").lowercased(),
+                actionItems: summary.map(ActionItems.parse) ?? [])
         }
         .sorted { $0.date > $1.date }
     }

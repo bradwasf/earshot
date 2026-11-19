@@ -601,8 +601,16 @@ public enum CallSummary {
                 lines.append("\(head): \(line[close.upperBound...])")
             }
         }
-        let summary = try await Summarizer(model: model).summarize(title: title, lines: lines, progress: progress)
-        try summary.markdown.write(to: folder.appendingPathComponent("summary.md"), atomically: true, encoding: .utf8)
+        var summary = try await Summarizer(model: model).summarize(title: title, lines: lines, progress: progress)
+        // Keep the action items the user already ticked off (re-read now: they may have changed meanwhile).
+        let url = folder.appendingPathComponent("summary.md")
+        if let previous = try? String(contentsOf: url, encoding: .utf8) {
+            summary = SummaryResult(
+                markdown: ActionItems.carryingOver(from: previous, into: summary.markdown),
+                suggestedTitle: summary.suggestedTitle, model: summary.model, seconds: summary.seconds,
+                chunks: summary.chunks)
+        }
+        try summary.markdown.write(to: url, atomically: true, encoding: .utf8)
         return summary
     }
 

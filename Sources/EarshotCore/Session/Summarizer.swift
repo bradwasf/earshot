@@ -332,7 +332,7 @@ public struct Summarizer: Sendable {
         let footer =
             "\n\n---\n_Summarized on-device with `\(model)` via Ollama in \(Int(seconds.rounded())) s. Full transcript: [transcript.md](transcript.md)_\n"
         return SummaryResult(
-            markdown: heading + "\n\n" + body + footer, suggestedTitle: suggested, model: model, seconds: seconds,
+            markdown: ActionItems.normalized(heading + "\n\n" + body) + footer, suggestedTitle: suggested, model: model, seconds: seconds,
             chunks: chunks.count)
     }
 
