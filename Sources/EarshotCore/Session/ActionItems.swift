@@ -19,8 +19,16 @@ public struct ActionItem: Sendable, Equatable, Hashable {
         (owner, task) = ActionItems.split(text)
     }
 
-    /// True when the owner is the person who recorded the call.
-    public var isMine: Bool { owner?.lowercased() == "me" }
+    /// True when the owner is "Me", the person who recorded the call.
+    public var isMine: Bool { isMine(names: [:]) }
+
+    /// True when the owner is the person who recorded the call: "Me", or the name "Me" was given
+    /// in this call (`names` is the transcript's speaker-name header, label → name), since naming
+    /// a speaker rewrites `**Me**` in summary.md to `**Sam**`.
+    public func isMine(names: [String: String]) -> Bool {
+        guard let owner else { return false }
+        return SpeakerNames.label(of: owner, names: names) == "Me"
+    }
 }
 
 /// Reads and edits the action items of summary.md, which are a Markdown task list

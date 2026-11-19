@@ -14,6 +14,8 @@ public struct SavedCall: Identifiable, Sendable, Equatable {
     public let searchText: String
     /// The action items of summary.md, ticked or not.
     public var actionItems: [ActionItem] = []
+    /// Names the user gave this call's speakers (label → name, e.g. "Me" → "Sam").
+    public var speakerNames: [String: String] = [:]
 
     public var openActionItems: [ActionItem] { actionItems.filter { !$0.done } }
 
@@ -74,18 +76,22 @@ public enum CallLibrary {
                 searchText: ([title, summary ?? ""] + speakerNames(parsed.turns) + parsed.turns.map(\.text)
                     + parsed.markers.map(\.marker.text))
                     .joined(separator: "\n").lowercased(),
-                actionItems: summary.map(ActionItems.parse) ?? [])
+                actionItems: summary.map(ActionItems.parse) ?? [],
+                speakerNames: parsed.names)
         }
         .sorted { $0.date > $1.date }
     }
 
+    /// A saved call's transcript. `names` maps Earshot's labels to the names the user gave them.
     public static func load(
         folder: URL
-    ) -> (title: String, duration: String?, turns: [SavedTurn], markers: [SavedMarker])? {
+    ) -> (
+        title: String, duration: String?, turns: [SavedTurn], markers: [SavedMarker], names: [String: String]
+    )? {
         guard let transcript = try? String(contentsOf: folder.appendingPathComponent("transcript.md"), encoding: .utf8)
         else { return nil }
         let parsed = parseTranscript(transcript)
-        return (parsed.title ?? folder.lastPathComponent, parsed.duration, parsed.turns, parsed.markers)
+        return (parsed.title ?? folder.lastPathComponent, parsed.duration, parsed.turns, parsed.markers, parsed.names)
     }
 
     /// The names given to speakers in these turns, so searching for "Priya" finds her calls.
@@ -136,12 +142,13 @@ public enum CallLibrary {
 
     static func parseTranscript(
         _ text: String
-    ) -> (title: String?, duration: String?, turns: [SavedTurn], markers: [SavedMarker]) {
+    ) -> (title: String?, duration: String?, turns: [SavedTurn], markers: [SavedMarker], names: [String: String]) {
         var title: String?
         var duration: String?
         var turns: [SavedTurn] = []
         // Speaker names (see `SpeakerNames`): name → Earshot's label.
         var labelForName: [String: String] = [:]
+        var names: [String: String] = [:]
         var markers: [SavedMarker] = []
         for line in text.components(separatedBy: "\n") {
             if let marker = TranscriptFormat.parseMarkerLine(line) {
@@ -151,7 +158,9 @@ public enum CallLibrary {
             } else if line.hasPrefix("- **Duration:** ") {
                 duration = line.dropFirst("- **Duration:** ".count).split(separator: " ").first.map(String.init)
             } else if line.hasPrefix(SpeakerNames.headerPrefix) {
-                for (label, name) in SpeakerNames.parseHeader(line) where labelForName[name] == nil {
+                let header = SpeakerNames.parseHeader(line)
+                names.merge(header) { first, _ in first }
+                for (label, name) in header where labelForName[name] == nil {
                     labelForName[name] = label
                 }
             } else if line.hasPrefix("**["), let timeEnd = line.range(of: "] "), let labelEnd = line.range(of: ":** ") {
@@ -168,7 +177,7 @@ public enum CallLibrary {
                         text: String(line[labelEnd.upperBound...]), originalLabel: original))
             }
         }
-        return (title, duration, turns, markers)
+        return (title, duration, turns, markers, names)
     }
 
     /// The text under "## TL;DR" (nil for summaries that failed or have no such section).

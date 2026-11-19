@@ -41,6 +41,22 @@ public enum SpeakerNames {
         return !number.isEmpty && number.allSatisfy(\.isASCII) && number.allSatisfy(\.isNumber)
     }
 
+    /// Earshot's label for a speaker as a summary names them (an action item's owner): the label
+    /// itself in any case ("me" → "Me", "them 2" → "Them 2"), or the label whose name it is in
+    /// `names` (label → name), ignoring case and accents. Nil for anyone else ("Unassigned").
+    public static func label(of speaker: String, names: [String: String]) -> String? {
+        let text = speaker.trimmingCharacters(in: .whitespaces)
+        let folded = fold(text)
+        if let named = names.sorted(by: { labelOrder($0.key, $1.key) }).first(where: { fold($0.value) == folded }) {
+            return named.key
+        }
+        let label = capitalizedLabel(text)
+        return isLabel(label) ? label : nil
+    }
+
+    /// The name "Me" has in a call, if the user gave one.
+    public static func myName(_ names: [String: String]) -> String? { names["Me"] }
+
     /// Channel and remote-speaker number for one of Earshot's labels.
     public static func identity(of label: String) -> (channel: Channel, speaker: Int?) {
         if label == "Me" { return (.me, nil) }
