@@ -9,7 +9,7 @@ import Foundation
 //   earshot-cli devices                     list audio devices
 //   earshot-cli live [--seconds N]          record the real microphone + system audio
 //   earshot-cli simulate --them a.wav [--me b.wav]   feed files through the live pipeline in real time
-//   earshot-cli summarize <call-folder>     (re)generate summary.md
+//   earshot-cli summarize <call-folder> [--instructions TEXT]   (re)generate summary.md
 
 setvbuf(stdout, nil, _IOLBF, 0)
 
@@ -91,6 +91,7 @@ func runSession(
 
     do { try await session.start() } catch { fail("could not start: \(error.localizedDescription)") }
     print("· recording for \(Int(seconds)) s → \(await session.folderURL?.path ?? "?")")
+    scheduleMarkers(arguments, session: session)
     try? await Task.sleep(nanoseconds: UInt64(seconds * 1e9))
     guard var result = await session.stop() else { fail("session produced no result") }
 
@@ -117,11 +118,43 @@ func runSession(
     guard !arguments.switches.contains("no-summary") else { return }
     let model = arguments.flags["model"] ?? Summarizer.defaultModel
     do {
-        let summary = try await CallSummary.write(for: &result, model: model) { print("· \($0)") }
+        let summary = try await CallSummary.write(
+            for: &result, model: model, instructions: arguments.flags["instructions"] ?? ""
+        ) { print("· \($0)") }
         print(String(format: "== Summary (%@, %.1f s, %d chunk(s)): %@", summary.model, summary.seconds, summary.chunks, result.folder.summaryURL.path))
     } catch {
         CallSummary.writeFailure(folder: result.folder.url, title: result.title, error: error)
         print("== Summary failed: \(error.localizedDescription)")
+    }
+}
+
+/// `--pause 10-20` (call seconds, several separated by commas), `--mark 5,12` and
+/// `--note "8=Ask about pricing"`: exercise notes, marks and off-the-record pauses in tests.
+func scheduleMarkers(_ arguments: Arguments, session: CallSession) {
+    func at(_ seconds: Double, _ action: @escaping @Sendable () async -> Void) {
+        Task {
+            try? await Task.sleep(nanoseconds: UInt64(max(0, seconds) * 1e9))
+            await action()
+        }
+    }
+    for span in (arguments.flags["pause"] ?? "").split(separator: ",") {
+        let bounds = span.split(separator: "-").compactMap { Double($0) }
+        guard bounds.count == 2, bounds[1] > bounds[0] else { fail("--pause needs START-END in seconds") }
+        at(bounds[0]) {
+            await session.setPaused(true)
+            print("· paused at \(bounds[0]) s")
+        }
+        at(bounds[1]) {
+            await session.setPaused(false)
+            print("· resumed at \(bounds[1]) s")
+        }
+    }
+    for time in (arguments.flags["mark"] ?? "").split(separator: ",").compactMap({ Double($0) }) {
+        at(time) { await session.addNote("") }
+    }
+    if let note = arguments.flags["note"], let equals = note.firstIndex(of: "="), let time = Double(note[..<equals]) {
+        let text = String(note[note.index(after: equals)...])
+        at(time) { await session.addNote(text) }
     }
 }
 
@@ -263,7 +296,9 @@ case "summarize":
     guard let folder = arguments.positional.first else { fail("summarize needs a call folder") }
     let model = arguments.flags["model"] ?? Summarizer.defaultModel
     do {
-        let summary = try await CallSummary.regenerate(folder: URL(fileURLWithPath: folder), model: model) { print("· \($0)") }
+        let summary = try await CallSummary.regenerate(
+            folder: URL(fileURLWithPath: folder), model: model, instructions: arguments.flags["instructions"] ?? ""
+        ) { print("· \($0)") }
         print(String(format: "Summary written with %@ in %.1f s (%d chunk(s)).", summary.model, summary.seconds, summary.chunks))
     } catch {
         fail(error.localizedDescription)
@@ -276,8 +311,9 @@ default:
           devices                                 list audio devices
           live [--seconds N] [--title T] [--blackhole | --no-system] [--no-mic] [--save-audio]
           simulate --them FILE [--me FILE] [--title T] [--partials]
-          summarize <call-folder> [--model NAME]
+          summarize <call-folder> [--model NAME] [--instructions TEXT]
+        live / simulate: --pause START-END[,…]  --mark SECONDS[,…]  --note "SECONDS=text"  (seconds into the call)
         common: --asr ultra|v3|v2  --model <ollama model>  --no-summary  --no-aec  --no-diarization
-                --no-echo-guard  --root <calls dir>  --metrics <json file>
+                --no-echo-guard  --root <calls dir>  --metrics <json file>  --instructions <extra summary guidance>
         """)
 }

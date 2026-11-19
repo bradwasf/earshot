@@ -52,13 +52,19 @@ public enum TranscriptFormat {
     }
 
     /// Consecutive segments from the same speaker are merged into one paragraph so the transcript
-    /// reads as turns rather than sentence fragments.
-    public static func turns(_ segments: [TranscriptSegment], remoteSpeakers: Int) -> [TranscriptTurn] {
+    /// reads as turns rather than sentence fragments. A turn is never merged across one of
+    /// `breaks` (call seconds), where a note, mark or pause sits.
+    public static func turns(
+        _ segments: [TranscriptSegment], remoteSpeakers: Int, breaks: [Double] = []
+    ) -> [TranscriptTurn] {
         var turns: [TranscriptTurn] = []
+        var previousStart = -Double.infinity
         for segment in segments.sorted(by: { $0.start < $1.start }) {
             let label = speakerLabel(segment, remoteSpeakers: remoteSpeakers)
+            let broken = breaks.contains { $0 > previousStart && $0 <= segment.start }
+            previousStart = segment.start
             if var last = turns.last, last.label == label, segment.start - last.end < 2.5,
-                segment.start - last.start < 45
+                segment.start - last.start < 45, !broken
             {
                 last.text += " " + segment.text
                 last.end = max(last.end, segment.end)
@@ -75,7 +81,7 @@ public enum TranscriptFormat {
 
     public static func markdown(
         title: String, startedAt: Date, duration: Double, segments: [TranscriptSegment], remoteSpeakers: Int,
-        inProgress: Bool
+        inProgress: Bool, markers: [CallMarker] = []
     ) -> String {
         let dateFormatter = DateFormatter()
         dateFormatter.dateFormat = "EEEE, d MMMM yyyy 'at' HH:mm"
@@ -93,18 +99,34 @@ public enum TranscriptFormat {
         lines.append("")
         lines.append("---")
         lines.append("")
-        let allTurns = turns(segments, remoteSpeakers: remoteSpeakers)
-        if allTurns.isEmpty { lines.append("_No speech was detected._") }
-        for turn in allTurns {
-            lines.append("**[\(timestamp(turn.start, alwaysHours: hours))] \(turn.label):** \(turn.text)")
+        let all = entries(segments, markers: markers, remoteSpeakers: remoteSpeakers)
+        if segments.isEmpty {
+            lines.append("_No speech was detected._")
+            if !markers.isEmpty { lines.append("") }
+        }
+        for entry in all {
+            switch entry {
+            case .turn(let turn):
+                lines.append("**[\(timestamp(turn.start, alwaysHours: hours))] \(turn.label):** \(turn.text)")
+            case .marker(let marker):
+                lines.append(markdownLine(marker, alwaysHours: hours))
+            }
             lines.append("")
         }
         return lines.joined(separator: "\n")
     }
 
-    /// Plain "[mm:ss] Speaker: text" lines for the summarizer prompt.
-    public static func plainText(_ segments: [TranscriptSegment], remoteSpeakers: Int) -> [String] {
-        turns(segments, remoteSpeakers: remoteSpeakers).map { "[\(timestamp($0.start))] \($0.label): \($0.text)" }
+    /// Plain "[mm:ss] Speaker: text" lines for the summarizer prompt, with the user's notes, marks
+    /// and pauses in between (see `plainLine`).
+    public static func plainText(
+        _ segments: [TranscriptSegment], remoteSpeakers: Int, markers: [CallMarker] = []
+    ) -> [String] {
+        entries(segments, markers: markers, remoteSpeakers: remoteSpeakers).map { entry in
+            switch entry {
+            case .turn(let turn): return "[\(timestamp(turn.start))] \(turn.label): \(turn.text)"
+            case .marker(let marker): return plainLine(marker)
+            }
+        }
     }
 }
 

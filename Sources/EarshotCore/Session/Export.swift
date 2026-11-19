@@ -8,6 +8,15 @@ public struct SummaryExport: Sendable, Equatable {
         /// Bullet text, still in Markdown ("**Me** — fix the bug").
         public var items: [String]
         public var prose: [String]
+        /// Per item: true when it was ticked off (`- [x]`). Only action items have checkboxes.
+        public var done: [Bool] = []
+
+        public var isActionItems: Bool { ActionItems.isActionHeading(name) }
+
+        /// Items paired with their ticked state.
+        public var entries: [(text: String, done: Bool)] {
+            items.enumerated().map { ($0.element, $0.offset < done.count && done[$0.offset]) }
+        }
     }
 
     public var title: String
@@ -37,9 +46,11 @@ public struct SummaryExport: Sendable, Equatable {
                 overview += (overview.isEmpty ? "" : " ") + line
             } else if !sections.isEmpty {
                 if line.hasPrefix("- ") || line.hasPrefix("* ") {
-                    var item = String(line.dropFirst(2)).trimmingCharacters(in: .whitespaces)
-                    for box in ["[ ] ", "[x] ", "[X] "] where item.hasPrefix(box) { item = String(item.dropFirst(box.count)) }
-                    if !item.lowercased().hasPrefix("none recorded") { sections[sections.count - 1].items.append(item) }
+                    let item = ActionItems.checkbox(String(line.dropFirst(2)))
+                    if !ActionItems.isPlaceholder(item.text) {
+                        sections[sections.count - 1].items.append(item.text)
+                        sections[sections.count - 1].done.append(item.done ?? false)
+                    }
                 } else {
                     sections[sections.count - 1].prose.append(line)
                 }
@@ -69,7 +80,8 @@ public struct SummaryExport: Sendable, Equatable {
     }
 
     private func slackSection(_ section: Section) -> String {
-        (["*\(Self.escapeSlack(section.name))*"] + section.prose.map(Self.slack) + section.items.map { "• " + Self.slack($0) })
+        (["*\(Self.escapeSlack(section.name))*"] + section.prose.map(Self.slack)
+            + section.entries.map { $0.done ? "• ✓ ~" + Self.slack($0.text) + "~" : "• " + Self.slack($0.text) })
             .joined(separator: "\n")
     }
 
@@ -148,7 +160,7 @@ public struct SummaryExport: Sendable, Equatable {
             parts.append(style == .slack ? "<p><b>\(name)</b></p>" : "<h2>\(name)</h2>")
             parts += section.prose.map { "<p>\(Self.html($0))</p>" }
             if !section.items.isEmpty {
-                parts.append("<ul>" + section.items.map { "<li>\(Self.html($0))</li>" }.joined() + "</ul>")
+                parts.append("<ul>" + section.entries.map { Self.htmlItem($0.text, done: $0.done) }.joined() + "</ul>")
             }
         }
         return parts.joined(separator: "\n")
@@ -159,9 +171,20 @@ public struct SummaryExport: Sendable, Equatable {
         var blocks: [String] = ["# \(title)" + (detail.map { "\n\n_\($0)_" } ?? "")]
         if !overview.isEmpty { blocks.append(overview) }
         for section in sections {
-            blocks.append((["## \(section.name)"] + section.prose + section.items.map { "- \($0)" }).joined(separator: "\n"))
+            blocks.append((["## \(section.name)"] + section.prose + Self.markdownItems(section)).joined(separator: "\n"))
         }
         return blocks.joined(separator: "\n\n") + "\n"
+    }
+
+    /// A list item; ticked-off action items are struck through with a check mark.
+    static func htmlItem(_ text: String, done: Bool) -> String {
+        done ? "<li>✓ <s>\(html(text))</s></li>" : "<li>\(html(text))</li>"
+    }
+
+    /// Bullets of a section; action items stay a Markdown task list (`- [ ]` / `- [x]`).
+    static func markdownItems(_ section: Section) -> [String] {
+        guard section.isActionItems else { return section.items.map { "- \($0)" } }
+        return section.entries.map { "- [\($0.done ? "x" : " ")] \($0.text)" }
     }
 
     // MARK: Inline Markdown

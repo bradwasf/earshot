@@ -61,8 +61,9 @@ Permissions are tied to the app's code signature. `scripts/build-app.sh` signs w
 1. Join your call as usual. Do not change any audio settings: your speakers or headphones and your microphone stay exactly as they are.
 2. Open Earshot (window, or the waveform icon in the menu bar) and press **Record** (⌘R). Optionally name the call first.
 3. The transcript scrolls live under a two-lane level display (Me above the line, Them below). The tinted card marked *live* is still being recognised; it becomes a regular card once the sentence is committed.
-4. Press the red timer button to stop. Earshot finishes the transcript, writes the summary and shows it as cards: In short, Key points, Decisions, Action items (with an owner chip), Open questions.
-5. The home screen lists your recent calls; click one to read its transcript and summary again.
+4. While recording, type in **Add a note…** at the bottom and press Return to drop a note into the transcript (at the moment you started typing), or press **⌘B** (the **Mark** button) to mark the moment. Press the pause button next to the timer (**⇧⌘P**) to go off the record; press it again to resume. Both are also in the **Call** menu and the menu-bar menu.
+5. Press the red timer button to stop. Earshot finishes the transcript, writes the summary and shows it as cards: In short, Key points, Decisions, Action items (with an owner chip in that speaker's colour; yours, owned by **Me** or by the name you gave yourself, are filled in), Open questions.
+6. The home screen lists your recent calls under day headers (Today, Yesterday, weekday names for the past week, then month and year), each with its time, length and TL;DR; click one to read its transcript and summary again.
 
 Everything is saved as you go:
 
@@ -75,16 +76,49 @@ Everything is saved as you go:
 
 If you leave the title empty, the call is named after the meeting app that is running (e.g. `zoom-call`) and renamed after the title the summary proposes. **Regenerate Summary** re-runs the summary for the last call, for example with a different model.
 
-**Settings (⌘,)**: call prompts, open at login, Slack webhook, system-audio source, microphone, echo handling, raw audio, speech model, speaker separation, summary model, calls folder.
+**Settings (⌘,)**: call prompts, what happens when a call ends, open at login, global shortcut, notifications, Slack webhook, system-audio source, microphone, echo handling, raw audio, speech model, speaker separation, summary model, extra summary instructions, calls folder.
+
+### Action items
+
+Action items are saved in `summary.md` as a Markdown task list (`- [ ] **Me** — task`, `- [x] …` once done), which GitHub, Obsidian and most notes apps show as checkboxes. Tick an item off in the Summary tab and the change is written to that one line straight away; anything else you edited in the file is left alone. Summaries written before this (plain `- ` bullets) read as open items and get a checkbox when you first tick one.
+
+Above the recent calls, **Open action items** lists what is still unticked from the calls of the last 30 days, newest first, with its owner and the call it came from (click the call to open it); the heading counts how many are yours. Ticking one there updates that call's `summary.md` too. Click the heading to fold the list away; it disappears when everything is done.
+
+**Regenerate Summary** keeps your ticks: items in the new summary with the same task stay ticked, and ticked items it leaves out are added back to its action items as done.
+
+### Notes, marks and pausing
+
+- **Notes and marks** appear in the transcript as your own asides, not as a speaker, and are saved in `transcript.md` as quote lines (`> **[12:03] Note:** Ask about pricing`, `> **[12:40] Marked**`). The summary treats them as what you found important, so noted and marked moments end up in the key points, decisions or action items. Notes alone do not make a call "with speech": a call with only notes is not summarized.
+- **Pause** stops everything from both sides being transcribed, saved or written to `audio.m4a` (it records silence, so times after you resume still match the call clock). The transcript gets a `> **[03:12 – 04:40] Paused**` line, and the summary is told nothing was captured in that gap. Speech already under way when you pause is kept up to the pause. You can stop while paused; call prompts keep working.
+
+### Summary instructions
+
+Settings › Summary › **Extra instructions for summaries** takes free text that is added to every summary: after a call, **Regenerate Summary**, and `earshot-cli summarize --instructions "…"`. Use it for language ("Write in Spanish"), focus ("Focus on engineering decisions") or names ("Them 1 is Priya, Them 2 is Raj"). The section layout (TL;DR, Key points, Decisions, Action items, Open questions) always stays the same, so the summary view and exports keep working.
 
 ### Call prompts
 
 While Earshot is running (its window can be closed; it stays in the menu bar), it notices when a meeting app joins a call and shows a card in the top-right corner of the screen: **Start transcribing?** with *Transcribe* and *Not now*. The card does not take focus from the call and goes away by itself after 30 seconds. When the call you are recording ends, a second card offers **Stop & summarize**; ignoring it keeps the recording going.
 
+**When a recorded call ends** (Settings › Calls) changes that second card: *Ask me* (the default) shows it as above; *Stop and summarize* shows **Stopping in 5 s** with *Stop now* and *Keep recording*, then stops by itself, so a brief drop does not end the recording (if the meeting app takes the microphone again during the countdown, the card goes away); *Keep recording* shows nothing and leaves stopping to you.
+
 - Watched apps: Zoom, Slack (huddles and calls), Microsoft Teams, Discord, Webex, FaceTime. Calls in a browser tab (Google Meet) are not detected; press Record for those.
 - How it works: every two seconds Earshot asks Core Audio which processes are capturing audio. A watched app holding the microphone for two seconds counts as joining a call; releasing it for six seconds counts as leaving. This needs no extra permission and reads no audio.
 - Anything else that makes one of those apps open the microphone (recording a Slack audio clip, Zoom's microphone test) also triggers the card.
 - Turn it off in Settings › Calls. **Open Earshot when I log in** (same place) keeps it running so that prompts appear without opening the app first.
+
+### Reading a call
+
+- **Name the speakers.** Click a speaker tag (or right-click a turn › *Rename*) and type a name: "Them 1" becomes "Priya", "Me" becomes yours. Every turn by that speaker changes, in the window and in the files: transcript.md gets a `- **Speaker names:** Me = Sam, Them 1 = Priya` line and the names on each turn, and summary.md has the old label replaced as a whole word (the heading and footnote are left alone). Exports and the Grok Bot prompt use the names. Clear the field or choose *Use "Them 1"* to go back. A name cannot be another speaker's label or name. Not available while a call is being recorded or summarized.
+- **Find in call (⌘F).** Highlights every match in the visible tab (transcript or summary), ignoring case and accents, with a "3 of 12" count. Return or ⌘G goes to the next match, ⇧Return or ⇧⌘G to the previous one; Esc closes the bar. Opening a call while the home search has text opens the bar with that query, on the tab where it matches. When the exact phrase is nowhere in the call, each word is highlighted instead.
+- **Play the recording.** When the call has `audio.m4a` (Settings › *Save raw audio*), a player bar appears at the bottom: play/pause (Space), ±15 s, a scrubber, and 1× / 1.5× / 2×. Click a turn's timestamp, or right-click › *Play from here*, to listen from a second before that line. The turn being played is tinted and, while *Follow* is on, kept in view. Playback stops when you leave the call or start a recording.
+- **Talk time.** Above the transcript, a thin bar shows each speaker's share of the talking (e.g. Me 34% · Priya 41% · Them 2 25%) and the call's length. It is estimated from the turns' start times: a turn lasts until the next one starts, but no longer than its words take to say, so pauses do not count.
+- **Right-click a turn** to copy its text, copy it as `[12:03] Priya: …`, play from there, or rename the speaker.
+
+### Menu bar, global shortcut and notifications
+
+- **⌃⌥⌘R** starts and stops recording from any app, without bringing Earshot forward: a small card confirms (*Transcribing* or *Stopped*) and the menu-bar icon turns into a red dot with the elapsed time. A recording started this way is named like one started with Record. It uses Carbon's hot-key API, so it needs no Accessibility permission. Turn it off in Settings › Shortcut and notifications; if another app already holds ⌃⌥⌘R, Settings says so and the shortcut does nothing.
+- The **menu-bar menu** lists the five newest calls (choose one to open it) and has **Copy Last Summary for Slack**, which copies the newest summary the same way as Export › Copy for Slack.
+- **Summary ready**: when a summary finishes (after a recording or *Regenerate summary*) while the Earshot window is not in front, a notification shows the call's title and TL;DR; clicking it opens the call. A failed summary is notified too. macOS asks for permission the first time; if you decline, Earshot stays quiet. Turn it off in Settings › Shortcut and notifications.
 
 ### Export and Slack
 
@@ -95,13 +129,19 @@ While Earshot is running (its window can be closed; it stays in the menu bar), i
 | **Copy for Slack** (⇧⌘C) | The summary on the clipboard as rich text that Slack's message box keeps (bold headings, bullets), with Slack markup (`*bold*`, `•`) as the plain-text form. Empty sections and the local file link are left out. |
 | **Send to Slack** | Posts the summary to one channel through a Slack incoming webhook. |
 | **Copy summary** | Rich text for documents, notes and mail; Markdown as the plain-text form. |
+| **Copy action items** (⌥⌘C) | Just the checklist with owners: rich text (☐ open, ☑ done) with a Markdown task list as the plain-text form. |
 | **Copy transcript** | Every line as `[00:12] Them 2: …`. |
+| **Save as Markdown…** (⇧⌘S) | One `.md` file with the summary followed by the full transcript, named after the call. |
+| **Save transcript as text…** | The transcript as a `.txt` file, in the same form as Copy transcript. |
+
+Ticked-off action items are struck through with a ✓ in Slack and rich text, and stay `- [x]` in Markdown.
 
 To set up **Send to Slack**: at [api.slack.com/apps](https://api.slack.com/apps) create an app for your workspace, switch on *Incoming Webhooks*, add a webhook for the channel, and paste its URL (`https://hooks.slack.com/services/…`) into Settings › Slack. *Send a test message* checks it. The URL is stored in your login keychain. Only `hooks.slack.com` addresses are accepted, and nothing is sent until you choose Send to Slack for a specific call; that post is the only network request Earshot makes beyond `127.0.0.1`.
 
 ### Managing calls
 
-- **Search** on the home screen matches titles, summaries and transcript text.
+- **Search** on the home screen matches titles, summaries and transcript text. ⌘F jumps to it, Esc clears it.
+- **Keyboard**: on the home screen ↑/↓ highlight a call, Return opens it and ⌘⌫ moves it to the Trash (press twice, like the trash button). In a call, Esc or ⌘[ goes back to the list (unless you are typing in a field).
 - **Rename** a call by clicking its title; the folder and both files follow.
 - **Delete** with the trash button on a call (click twice) or *Move to Trash* in a call's right-click menu. Calls go to the macOS Trash and can be put back.
 
@@ -164,7 +204,7 @@ Accuracy is on par for English, so speed and behaviour in silence decide. At hun
 
 **Summaries:** Ollama on localhost. The default model is `qwen3.5:4b-mlx`, chosen for speed (a 43-minute call is summarized in about 40 s). `qwen3.8:27b-mlx` writes slightly richer notes and is a one-click switch in Settings, at two to four times the wait on long calls. Transcripts longer than about 12,000 characters (roughly ten minutes of talk) are summarized in chunks: every chunk yields its decisions, action items and open questions, the lists are merged in code so nothing can be dropped by a second model pass, and the model then writes only the title and TL;DR. The context window is sized to each prompt, because Ollama's default silently truncates long input.
 
-**UI:** SwiftUI (window + menu-bar item), one process, no web server, with its own look in light and dark mode rather than stock controls (see `Sources/Earshot/Theme.swift`).
+**UI:** SwiftUI (window + menu-bar item), one process, no web server, with its own look in light and dark mode rather than stock controls: ink on paper, with colour kept for meaning (one hue per speaker, red for recording), a serif for what was said, and a reading column that stays a comfortable width in large windows. The design tokens are in `Sources/Earshot/Theme.swift` and the shared controls in `Sources/Earshot/Components.swift`.
 
 ## Measured performance
 
@@ -217,10 +257,12 @@ earshot-cli models                               # download + compile the speech
 earshot-cli devices                              # list audio devices (and whether BlackHole is installed)
 earshot-cli live --seconds 60 --title "Test"     # record the real microphone + system audio
 earshot-cli simulate --them a.wav --me b.wav     # feed two files through the live pipeline in real time
-earshot-cli summarize ~/Earshot/Calls/<folder>   # (re)write summary.md for a saved call
+earshot-cli summarize ~/Earshot/Calls/<folder>   # (re)write summary.md for a saved call (optional --instructions "…")
 ```
 
-Unit tests for the pure logic (timeline alignment, transcript and folder format, summary chunking and merging): `swift test`.
+`live` and `simulate` also take `--pause 20-40`, `--mark 12` and `--note "50=text"` (seconds into the call) to exercise notes, marks and pausing.
+
+Unit tests for the pure logic (timeline alignment, transcript and folder format, notes and pauses, summary chunking, merging and prompts): `swift test`.
 
 Re-running the end-to-end test:
 
@@ -238,7 +280,7 @@ Sources/EarshotCore/Audio     capture: process tap, device input (mic / BlackHol
 Sources/EarshotCore/Speech    models, VAD + Parakeet streaming transcriber, Sortformer speakers, echo canceller
 Sources/EarshotCore/Session   call session, transcript + folder format, Ollama summarizer, export (Slack markup, webhook)
 Sources/EarshotCore/Detection which meeting apps hold the microphone, and the joined / ended state machine
-Sources/Earshot               SwiftUI app (window, menu bar, settings, call prompt card; Theme.swift holds colours and type)
+Sources/Earshot               SwiftUI app (window, menu bar, settings, call prompt card; Theme.swift holds the design tokens, Components.swift the shared controls)
 Sources/earshot-cli           headless CLI and test harness
 Tests/EarshotCoreTests        unit tests
 scripts/build-app.sh          builds and signs build/Earshot.app

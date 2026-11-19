@@ -2,27 +2,56 @@ import AppKit
 import EarshotCore
 import SwiftUI
 
-/// Earshot's visual language: warm paper / deep ink surfaces, a sky-blue voice for "Me",
-/// one hue per remote speaker, rounded type for controls and a serif for what was said.
+/// Earshot's design tokens. The look is "ink on paper": warm paper (light) or charcoal (dark)
+/// surfaces, controls drawn in ink, and colour kept for meaning only: who is speaking (one hue
+/// per speaker), recording (red) and things that need attention (amber). Titles and everything
+/// people said are set in a serif for long reading; controls use the system sans.
+///
+/// Reusable pieces built from these tokens live in `Components.swift`.
 enum Theme {
-    static let background = dynamic(light: 0xF5F3EE, dark: 0x0F1216)
-    static let surface = dynamic(light: 0xFFFFFF, dark: 0x181C22)
-    static let surfaceHover = dynamic(light: 0xFBFAF7, dark: 0x1E232B)
-    static let well = dynamic(light: 0xEBE8E1, dark: 0x090B0E)
-    static let ink = dynamic(light: 0x16191E, dark: 0xECEEF2)
-    static let inkSoft = dynamic(light: 0x16191E, dark: 0xECEEF2, lightAlpha: 0.64, darkAlpha: 0.66)
-    static let inkFaint = dynamic(light: 0x16191E, dark: 0xECEEF2, lightAlpha: 0.42, darkAlpha: 0.42)
-    static let hairline = dynamic(light: 0x16191E, dark: 0xFFFFFF, lightAlpha: 0.10, darkAlpha: 0.08)
+    // MARK: Surfaces
 
-    static let me = dynamic(light: 0x0273B0, dark: 0x4CC2F5)
-    static let record = dynamic(light: 0xDC3B41, dark: 0xF2555A)
-    static let caution = dynamic(light: 0xB8690A, dark: 0xF5B642)
+    /// The window.
+    static let canvas = dynamic(light: 0xF6F4EF, dark: 0x121315)
+    /// Cards, menus, popovers.
+    static let surface = dynamic(light: 0xFFFFFF, dark: 0x1B1D20)
+    /// Above a surface: the selected tab, popover rows on hover.
+    static let raised = dynamic(light: 0xFFFFFF, dark: 0x2E3135)
+    /// Wells: fields, the waveform, tracks.
+    static let sunken = dynamic(light: 0xECE9E2, dark: 0x0C0D0F)
+    /// Hover and quiet fills (ink at low opacity, so it works on any surface).
+    static let wash = dynamic(light: 0x1C1B19, dark: 0xEDEBE6, lightAlpha: 0.05, darkAlpha: 0.06)
+    /// Pressed, selected.
+    static let washStrong = dynamic(light: 0x1C1B19, dark: 0xEDEBE6, lightAlpha: 0.09, darkAlpha: 0.11)
 
+    // MARK: Ink
+
+    static let ink = dynamic(light: 0x1C1B19, dark: 0xEDEBE6)
+    /// Secondary text (≥ 4.5:1 on canvas and surface).
+    static let inkSoft = dynamic(light: 0x1C1B19, dark: 0xEDEBE6, lightAlpha: 0.68, darkAlpha: 0.68)
+    /// Tertiary text: timestamps, placeholders, counts.
+    static let inkFaint = dynamic(light: 0x1C1B19, dark: 0xEDEBE6, lightAlpha: 0.50, darkAlpha: 0.48)
+    /// Dividers and card edges.
+    static let hairline = dynamic(light: 0x1C1B19, dark: 0xFFFFFF, lightAlpha: 0.09, darkAlpha: 0.08)
+    /// Control borders (a little stronger than a hairline).
+    static let stroke = dynamic(light: 0x1C1B19, dark: 0xFFFFFF, lightAlpha: 0.15, darkAlpha: 0.14)
+    /// Text and symbols on an ink fill.
+    static let onInk = dynamic(light: 0xF6F4EF, dark: 0x121315)
+
+    // MARK: Meaning
+
+    static let record = dynamic(light: 0xCF323A, dark: 0xF0555B)
+    static let caution = dynamic(light: 0x8F6200, dark: 0xE8B546)
+    /// Keyboard focus and the find bar's edge.
+    static let focus = dynamic(light: 0x1D6BC0, dark: 0x6CB6FF, lightAlpha: 0.75, darkAlpha: 0.8)
+
+    /// "Me". Every hue below keeps ≥ 4.5:1 against canvas and surface in its mode.
+    static let me = dynamic(light: 0x1D6BC0, dark: 0x6CB6FF)
     private static let remote = [
-        dynamic(light: 0x0E8F6E, dark: 0x3DD6A3),
-        dynamic(light: 0xB8690A, dark: 0xF5B642),
-        dynamic(light: 0x6D4FCF, dark: 0xAD95FB),
-        dynamic(light: 0xC93A63, dark: 0xFA7D97),
+        dynamic(light: 0x0C7A5C, dark: 0x4BD3A4),  // green
+        dynamic(light: 0x9C5800, dark: 0xF0B44E),  // amber
+        dynamic(light: 0x7048D4, dark: 0xB7A0FF),  // violet
+        dynamic(light: 0xBE3159, dark: 0xFF8DA8),  // rose
     ]
 
     /// 0 is "Me"; 1… are remote speakers in order of first appearance.
@@ -34,10 +63,20 @@ enum Theme {
         channel == .me ? 0 : max(1, speaker ?? 1)
     }
 
-    static let accentGradient = LinearGradient(
-        colors: [Color(hex: 0x3BBDF7), Color(hex: 0x0284C7)], startPoint: .top, endPoint: .bottom)
-    static let recordGradient = LinearGradient(
-        colors: [Color(hex: 0xF76268), Color(hex: 0xD9363C)], startPoint: .top, endPoint: .bottom)
+    /// The tone of one of Earshot's labels ("Me", "Them", "Them 2").
+    static func tone(label: String) -> Int {
+        let identity = SpeakerNames.identity(of: label)
+        return tone(channel: identity.channel, speaker: identity.speaker)
+    }
+
+    // MARK: Find highlights (a highlighter pen, not a speaker colour)
+
+    static let findMatch = dynamic(light: 0xF5C04A, dark: 0xF5B642, lightAlpha: 0.38, darkAlpha: 0.30)
+    static let findCurrent = dynamic(light: 0xF2A900, dark: 0xF5B642, lightAlpha: 0.85, darkAlpha: 0.75)
+
+    // MARK: Plumbing
+
+    static var canvasNSColor: NSColor { NSColor(canvas) }
 
     private static func dynamic(light: UInt32, dark: UInt32, lightAlpha: CGFloat = 1, darkAlpha: CGFloat = 1) -> Color {
         Color(
@@ -47,6 +86,83 @@ enum Theme {
             })
     }
 }
+
+// MARK: - Type
+
+/// The type scale. Controls use the system sans; titles and what people said use the serif.
+enum TypeScale {
+    /// Screen titles (a call's name).
+    static let display = Font.system(size: 24, weight: .semibold, design: .serif)
+    /// Empty-state and card titles.
+    static let title = Font.system(size: 18, weight: .semibold, design: .serif)
+    /// Row titles, prompt-card titles.
+    static let headline = Font.system(size: 14, weight: .semibold)
+    /// Controls and short UI text.
+    static let body = Font.system(size: 13)
+    static let bodyStrong = Font.system(size: 13, weight: .semibold)
+    /// Supporting text: status lines, helper text.
+    static let callout = Font.system(size: 12)
+    static let calloutStrong = Font.system(size: 12, weight: .semibold)
+    /// Captions, chips, footers.
+    static let caption = Font.system(size: 11)
+    static let captionStrong = Font.system(size: 11, weight: .semibold)
+    /// All-caps labels (`Eyebrow`).
+    static let label = Font.system(size: 10.5, weight: .semibold)
+
+    /// Transcript turns.
+    static let reading = Font.system(size: 15.5, design: .serif)
+    /// The summary's "In short".
+    static let readingLede = Font.system(size: 17, design: .serif)
+    /// Summary items, list previews.
+    static let readingSmall = Font.system(size: 14.5, design: .serif)
+    static let readingCompact = Font.system(size: 13.5, design: .serif)
+
+    /// Timestamps, counters, durations.
+    static let stamp = Font.system(size: 10.5, weight: .medium, design: .monospaced)
+    static let stampLarge = Font.system(size: 12, weight: .medium, design: .monospaced)
+
+    /// Line spacing for serif paragraphs.
+    static let readingLeading: CGFloat = 4.5
+}
+
+// MARK: - Space, shape, motion
+
+enum Space {
+    static let xxs: CGFloat = 2
+    static let xs: CGFloat = 4
+    static let s: CGFloat = 8
+    static let m: CGFloat = 12
+    static let l: CGFloat = 16
+    static let xl: CGFloat = 24
+    static let xxl: CGFloat = 32
+}
+
+enum Radius {
+    /// Checkboxes, small tiles.
+    static let s: CGFloat = 5
+    /// Menu rows, fields, inner highlights.
+    static let m: CGFloat = 9
+    /// Cards.
+    static let l: CGFloat = 14
+}
+
+enum Metrics {
+    /// Widest the reading column gets; wider windows centre it.
+    static let column: CGFloat = 720
+    /// Space between the column and the window edge.
+    static let gutter: CGFloat = 24
+}
+
+enum Motion {
+    /// Hover, press, small toggles.
+    static let quick = Animation.snappy(duration: 0.16)
+    /// Panels appearing, tabs, lists changing.
+    static let standard = Animation.snappy(duration: 0.24)
+    /// Screens changing.
+    static let screen = Animation.snappy(duration: 0.3)
+}
+
+// MARK: - Colour helpers
 
 extension NSColor {
     convenience init(hex: UInt32, alpha: CGFloat = 1) {
@@ -58,130 +174,4 @@ extension NSColor {
 
 extension Color {
     init(hex: UInt32) { self.init(nsColor: NSColor(hex: hex)) }
-}
-
-extension Font {
-    /// Controls, labels, headings.
-    static func ui(_ size: CGFloat, _ weight: Font.Weight = .regular) -> Font {
-        .system(size: size, weight: weight, design: .rounded)
-    }
-
-    /// Transcript and summary prose.
-    static func reading(_ size: CGFloat, _ weight: Font.Weight = .regular) -> Font {
-        .system(size: size, weight: weight, design: .serif)
-    }
-
-    /// Timestamps and counters.
-    static func stamp(_ size: CGFloat) -> Font {
-        .system(size: size, weight: .medium, design: .monospaced)
-    }
-}
-
-// MARK: - Shared pieces
-
-/// A quiet capsule button for secondary actions.
-struct GhostButtonStyle: ButtonStyle {
-    @Environment(\.isEnabled) private var isEnabled
-    @State private var hovering = false
-
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.ui(12, .medium))
-            .foregroundStyle(Theme.ink.opacity(isEnabled ? 0.85 : 0.35))
-            .padding(.horizontal, 11)
-            .padding(.vertical, 5)
-            .background(
-                Capsule().fill(hovering && isEnabled ? Theme.surfaceHover : Theme.surface)
-            )
-            .overlay(Capsule().strokeBorder(Theme.hairline))
-            .opacity(configuration.isPressed ? 0.7 : 1)
-            .onHover { hovering = $0 }
-    }
-}
-
-/// Small all-caps label used for section names and speaker tags.
-struct Eyebrow: View {
-    let text: String
-    var color: Color = Theme.inkFaint
-
-    var body: some View {
-        Text(text.uppercased())
-            .font(.ui(10.5, .bold))
-            .tracking(1.1)
-            .foregroundStyle(color)
-    }
-}
-
-/// A rounded panel on the window background.
-struct Card<Content: View>: View {
-    var padding: CGFloat = 14
-    @ViewBuilder var content: Content
-
-    var body: some View {
-        content
-            .padding(padding)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Theme.surface))
-            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Theme.hairline))
-    }
-}
-
-/// Makes the hidden-title-bar window draggable by its background.
-struct WindowChrome: NSViewRepresentable {
-    func makeNSView(context: Context) -> NSView {
-        let view = NSView()
-        DispatchQueue.main.async {
-            guard let window = view.window else { return }
-            window.titlebarAppearsTransparent = true
-            window.isMovableByWindowBackground = true
-            window.backgroundColor = NSColor(Theme.background)
-        }
-        return view
-    }
-
-    func updateNSView(_ nsView: NSView, context: Context) {}
-}
-
-/// Uses thin overlay scrollers even when the system setting is "always show scroll bars",
-/// so no grey scroller track cuts through the custom surfaces. Place inside a ScrollView.
-struct OverlayScrollers: NSViewRepresentable {
-    final class Probe: NSView {
-        private var observer: NSObjectProtocol?
-
-        override func viewDidMoveToWindow() {
-            super.viewDidMoveToWindow()
-            guard window != nil else { return }
-            // SwiftUI configures its scroll view after the content is installed, so apply the
-            // style a few times, and again whenever the system preference changes.
-            for delay in [0.0, 0.15, 0.6] {
-                DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in self?.apply() }
-            }
-            if observer == nil {
-                observer = NotificationCenter.default.addObserver(
-                    forName: NSScroller.preferredScrollerStyleDidChangeNotification, object: nil, queue: .main
-                ) { [weak self] _ in
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { self?.apply() }
-                }
-            }
-        }
-
-        private func apply() {
-            var view: NSView? = self
-            while let current = view {
-                if let scrollView = current as? NSScrollView {
-                    scrollView.scrollerStyle = .overlay
-                    scrollView.drawsBackground = false
-                    return
-                }
-                view = current.superview
-            }
-        }
-
-        deinit {
-            if let observer { NotificationCenter.default.removeObserver(observer) }
-        }
-    }
-
-    func makeNSView(context: Context) -> NSView { Probe() }
-    func updateNSView(_ nsView: NSView, context: Context) {}
 }

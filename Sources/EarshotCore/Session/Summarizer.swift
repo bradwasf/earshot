@@ -185,10 +185,16 @@ public struct Summarizer: Sendable {
     /// Transcript characters per chunk (~4 characters per token, so ~3k tokens, about ten minutes
     /// of conversation). Small local models attribute owners far more reliably on short chunks.
     public var chunkCharacters = 12_000
+    /// The user's own guidance for every summary ("Write in Spanish", "Use the names Priya and Raj
+    /// for Them 1 and Them 2"). Added to each prompt below the required format, which stays authoritative.
+    public var extraInstructions = ""
 
-    public init(model: String = Summarizer.defaultModel, client: OllamaClient = OllamaClient()) {
+    public init(
+        model: String = Summarizer.defaultModel, client: OllamaClient = OllamaClient(), extraInstructions: String = ""
+    ) {
         self.model = model
         self.client = client
+        self.extraInstructions = extraInstructions
     }
 
     private static let tldrSection = """
@@ -233,7 +239,8 @@ public struct Summarizer: Sendable {
         }
 
         let chunks = Self.chunk(lines, limit: chunkCharacters)
-        guard !chunks.isEmpty else {
+        // Notes, marks and pauses alone are not a conversation to summarize.
+        guard lines.contains(where: { !$0.isEmpty && !TranscriptFormat.isMarkerLine($0) }) else {
             return SummaryResult(
                 markdown: "# \(title) — Summary\n\n_No speech was transcribed, so there is nothing to summarize._\n",
                 suggestedTitle: nil, model: model, seconds: 0, chunks: 0)
@@ -243,21 +250,7 @@ public struct Summarizer: Sendable {
         let suggested: String?
         if chunks.count == 1 {
             progress("Summarizing…")
-            let prompt = """
-                Write the meeting notes for the call below.
-
-                Start with a single line `Title: <a specific 3-7 word title for this call>`, then output exactly these \
-                five sections, in this order, following the instruction under each heading:
-
-                \(Self.tldrSection)
-
-                \(Self.keyPointsSection)
-
-                \(Self.outcomeSections)
-
-                Transcript:
-                \(chunks[0])
-                """
+            let prompt = Self.singlePassPrompt(transcript: chunks[0], extraInstructions: extraInstructions)
             let context = Self.contextTokens(for: prompt, output: 1500)
             var reply = try await client.chat(
                 model: model, system: Self.system, user: prompt, contextTokens: context, maxOutputTokens: 1500
@@ -279,18 +272,8 @@ public struct Summarizer: Sendable {
             var merged = [[String]](repeating: [], count: Self.listHeadings.count)
             for (index, chunk) in chunks.enumerated() {
                 progress("Summarizing part \(index + 1) of \(chunks.count)…")
-                let prompt = """
-                    This is part \(index + 1) of \(chunks.count) of a long call transcript. Write the meeting notes for \
-                    this part only, without mentioning that it is a part or where it starts or ends. Output exactly \
-                    these four sections, in this order, following the instruction under each heading:
-
-                    \(Self.outcomeSections)
-
-                    \(Self.keyPointsSection)
-
-                    Transcript part \(index + 1):
-                    \(chunk)
-                    """
+                let prompt = Self.chunkPrompt(
+                    transcript: chunk, part: index + 1, of: chunks.count, extraInstructions: extraInstructions)
                 let context = Self.contextTokens(for: prompt, output: 1200)
                 var reply = try await client.chat(
                     model: model, system: Self.system, user: prompt, contextTokens: context, maxOutputTokens: 1200)
@@ -311,13 +294,7 @@ public struct Summarizer: Sendable {
             }.joined(separator: "\n\n")
 
             progress("Writing the overview…")
-            let prompt = """
-                Below are the complete notes of one call. Output exactly two lines and nothing else:
-                Title: <a specific 3-7 word title for this call>
-                TL;DR: <two or three sentences: what the call was about and how it ended>
-
-                \(lists)
-                """
+            let prompt = Self.overviewPrompt(notes: lists, extraInstructions: extraInstructions)
             let reply = try await client.chat(
                 model: model, system: Self.system, user: prompt,
                 contextTokens: Self.contextTokens(for: prompt, output: 300), maxOutputTokens: 300)
@@ -332,11 +309,96 @@ public struct Summarizer: Sendable {
         let footer =
             "\n\n---\n_Summarized on-device with `\(model)` via Ollama in \(Int(seconds.rounded())) s. Full transcript: [transcript.md](transcript.md)_\n"
         return SummaryResult(
-            markdown: heading + "\n\n" + body + footer, suggestedTitle: suggested, model: model, seconds: seconds,
+            markdown: ActionItems.normalized(heading + "\n\n" + body) + footer, suggestedTitle: suggested, model: model, seconds: seconds,
             chunks: chunks.count)
     }
 
     static let listHeadings = ["Key points", "Decisions", "Action items", "Open questions"]
+
+    // MARK: - Prompts
+
+    static func singlePassPrompt(transcript: String, extraInstructions: String = "") -> String {
+        """
+        Write the meeting notes for the call below.
+
+        Start with a single line `Title: <a specific 3-7 word title for this call>`, then output exactly these \
+        five sections, in this order, following the instruction under each heading:
+
+        \(tldrSection)
+
+        \(keyPointsSection)
+
+        \(outcomeSections)
+        \(markerGuidance(for: transcript))\(instructionBlock(extraInstructions, labels: "`Title:` line and every heading"))
+        Transcript:
+        \(transcript)
+        """
+    }
+
+    static func chunkPrompt(transcript: String, part: Int, of parts: Int, extraInstructions: String = "") -> String {
+        """
+        This is part \(part) of \(parts) of a long call transcript. Write the meeting notes for \
+        this part only, without mentioning that it is a part or where it starts or ends. Output exactly \
+        these four sections, in this order, following the instruction under each heading:
+
+        \(outcomeSections)
+
+        \(keyPointsSection)
+        \(markerGuidance(for: transcript))\(instructionBlock(extraInstructions, labels: "heading"))
+        Transcript part \(part):
+        \(transcript)
+        """
+    }
+
+    static func overviewPrompt(notes: String, extraInstructions: String = "") -> String {
+        """
+        Below are the complete notes of one call. Output exactly two lines and nothing else:
+        Title: <a specific 3-7 word title for this call>
+        TL;DR: <two or three sentences: what the call was about and how it ended>
+        \(instructionBlock(extraInstructions, labels: "`Title:` and `TL;DR:` label"))
+        \(notes)
+        """
+    }
+
+    /// Explains the user's notes, marks and pauses, when the transcript has any.
+    static func markerGuidance(for transcript: String) -> String {
+        let lines = transcript.components(separatedBy: "\n").filter(TranscriptFormat.isMarkerLine)
+        guard !lines.isEmpty else { return "" }
+        var rules: [String] = []
+        if lines.contains(where: { $0.contains(TranscriptFormat.notePrefix) || $0.contains(TranscriptFormat.markText) }) {
+            rules.append(
+                """
+                Lines with NOTE or MARK were added by Me, the person who recorded the call, while it was going on. \
+                They show what Me considers important: make sure the moments they point to (what was being said \
+                at that time) are reflected in the key points, decisions or action items. A NOTE may itself state \
+                a task or a decision; treat it as Me's own words. Do not mention the NOTE or MARK labels themselves.
+                """)
+        }
+        if lines.contains(where: { $0.contains(TranscriptFormat.pauseText) }) {
+            rules.append(
+                """
+                Lines with PAUSED mark a stretch where recording was switched off. Nothing said then was \
+                captured: do not guess what happened in that gap.
+                """)
+        }
+        return "\n" + rules.joined(separator: "\n") + "\n"
+    }
+
+    /// The user's extra instructions, fenced and subordinate to the required format.
+    static func instructionBlock(_ text: String, labels: String) -> String {
+        let trimmed = String(text.trimmingCharacters(in: .whitespacesAndNewlines).prefix(2000))
+        guard !trimmed.isEmpty else { return "" }
+        return """
+
+            Additional instructions from the user, between the markers below. Follow them for language, focus, \
+            style and names, but they never change the required format: keep the \(labels) exactly as given \
+            above (in English), and the same sections in the same order.
+            <<<
+            \(trimmed)
+            >>>
+
+            """
+    }
 
     /// A reply is usable when every list section is present and it did not degenerate into a loop.
     static func isComplete(_ text: String) -> Bool {

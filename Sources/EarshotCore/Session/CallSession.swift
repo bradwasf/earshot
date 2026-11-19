@@ -88,6 +88,8 @@ public struct CallResult: Sendable {
     public let segments: [TranscriptSegment]
     public let remoteSpeakers: Int
     public let metrics: SessionMetrics
+    /// Notes, marks and pauses, in call order.
+    public var markers: [CallMarker] = []
 }
 
 /// One recorded call: capture → align → (echo-cancel) → VAD → ASR → transcript on disk.
@@ -110,6 +112,9 @@ public actor CallSession {
     private var running = false
 
     private var segments: [TranscriptSegment] = []
+    private var markers: [CallMarker] = []
+    /// Silences paused stretches before any audio reaches the transcribers or the raw recording.
+    private let gate = PauseGate()
     private var remoteSpeakers = 0
     private var lastSave = 0.0
     private var saveScheduled = false
@@ -175,6 +180,7 @@ public actor CallSession {
         typealias Raw = (samples: [Float], host: Double)
         let onEvent = self.onEvent
         let writer = self.writer
+        let gate = self.gate
 
         // 1. Open the devices. Audio queues up in the raw streams until the routers start.
         //    The microphone goes first: opening the system tap can block on the macOS
@@ -216,32 +222,49 @@ public actor CallSession {
                 Task.detached(priority: .userInitiated) {
                     var aligner = TimelineAligner(origin: origin)
                     var lastLevel = 0.0
+                    // Samples sent to the transcriber so far: its position on the call timeline.
+                    var transcribed = 0
+                    /// Off the record: the transcriber, the speaker tracker and audio.m4a get silence
+                    /// for paused stretches, so the timeline and the models' state stay continuous.
+                    func gated(_ samples: [Float], from first: Int) -> [Float] {
+                        var samples = samples
+                        gate.silence(&samples, firstSample: first)
+                        return samples
+                    }
+                    func transcribe(_ samples: [Float], arrival: Double) {
+                        asrContinuation.yield((gated(samples, from: transcribed), arrival))
+                        transcribed += samples.count
+                    }
                     for await raw in rawStream {
                         if raw.host - lastLevel > 0.08 {
                             lastLevel = raw.host
-                            onEvent(.level(channel, Self.rms(raw.samples)))
+                            onEvent(.level(channel, gate.isPaused ? 0 : Self.rms(raw.samples)))
                         }
                         let aligned = aligner.align(raw.samples, hostSeconds: raw.host)
                         guard !aligned.isEmpty else { continue }
-                        writer?.append(aligned, channel: channel)
+                        let first = aligner.position - aligned.count
+                        let silenced = gated(aligned, from: first)
+                        writer?.append(silenced, channel: channel)
                         switch channel {
                         case .them:
+                            // The echo canceller keeps hearing the real audio while paused (in memory
+                            // only, never kept), so it stays adapted and no echo leaks in on resume.
                             await echo?.pushReference(aligned)
-                            if tracker != nil { diarContinuation.yield(aligned) }
-                            asrContinuation.yield((aligned, raw.host))
+                            if tracker != nil { diarContinuation.yield(silenced) }
+                            transcribe(aligned, arrival: raw.host)
                         case .me:
                             if let echo {
                                 let behind = HostClock.now - raw.host
                                 let cleaned = await echo.process(mic: aligned, bypass: behind > 2)
-                                if !cleaned.isEmpty { asrContinuation.yield((cleaned, raw.host)) }
+                                if !cleaned.isEmpty { transcribe(cleaned, arrival: raw.host) }
                             } else {
-                                asrContinuation.yield((aligned, raw.host))
+                                transcribe(aligned, arrival: raw.host)
                             }
                         }
                     }
                     if channel == .me, let echo {
                         let tail = await echo.flush()
-                        if !tail.isEmpty { asrContinuation.yield((tail, HostClock.now)) }
+                        if !tail.isEmpty { transcribe(tail, arrival: HostClock.now) }
                     }
                     asrContinuation.finish()
                     diarContinuation.finish()
@@ -297,6 +320,9 @@ public actor CallSession {
         microphone?.stop()
         system?.stop()
         let duration = HostClock.now - origin
+        // Stopping while paused: the pause runs to the end of the call (the gate keeps muting
+        // whatever audio is still being drained).
+        if gate.resume(at: duration) { closeOpenPause(at: duration) }
 
         // Drain: raw streams → routers → transcribers (final decode) → event handlers.
         continuations.forEach { $0() }
@@ -325,7 +351,51 @@ public actor CallSession {
         return CallResult(
             folder: folder, title: config.title, titleIsPlaceholder: config.titleIsPlaceholder, startedAt: startedAt,
             duration: duration, segments: segments.sorted { $0.start < $1.start }, remoteSpeakers: remoteSpeakers,
-            metrics: metrics)
+            metrics: metrics, markers: markers.sorted { $0.start < $1.start })
+    }
+
+    // MARK: - Notes, marks and pauses
+
+    public var isPaused: Bool { gate.isPaused }
+
+    /// Adds a note to the transcript; empty text adds a mark. `secondsAgo` places it where the
+    /// user started typing (capped at a minute). Returns nil when not recording.
+    @discardableResult
+    public func addNote(_ text: String, secondsAgo: Double = 0) -> CallMarker? {
+        guard running else { return nil }
+        let clean = CallMarker.cleanNote(text)
+        let time = max(0, HostClock.now - origin - min(max(0, secondsAgo), 60))
+        let marker = CallMarker(kind: clean.isEmpty ? .mark : .note, start: time, text: clean)
+        markers.append(marker)
+        save(force: true)
+        return marker
+    }
+
+    /// Pauses or resumes capture. While paused nothing from either side is transcribed, saved or
+    /// recorded; the transcript gets a "Paused" marker. Returns the pause marker (opened or closed),
+    /// or nil when nothing changed.
+    @discardableResult
+    public func setPaused(_ paused: Bool) -> CallMarker? {
+        guard running else { return nil }
+        let now = HostClock.now - origin
+        if paused {
+            guard gate.pause(at: now) else { return nil }
+            let marker = CallMarker(kind: .pause, start: now)
+            markers.append(marker)
+            save(force: true)
+            return marker
+        }
+        guard gate.resume(at: now) else { return nil }
+        let marker = closeOpenPause(at: now)
+        save(force: true)
+        return marker
+    }
+
+    @discardableResult
+    private func closeOpenPause(at time: Double) -> CallMarker? {
+        guard let index = markers.lastIndex(where: { $0.kind == .pause && $0.end == nil }) else { return nil }
+        markers[index].end = max(markers[index].start, time)
+        return markers[index]
     }
 
     // MARK: - Transcript events
@@ -333,6 +403,12 @@ public actor CallSession {
     private func handle(_ event: ChannelEvent, channel: Channel) async {
         let now = HostClock.now - origin
         switch event {
+        case .partial(_, let start, _, _) where gate.contains(start, margin: 0.5),
+            .final(_, let start, _, _, _) where gate.contains(start, margin: 0.5):
+            // Speech that began while paused (the audio was silenced, so this is only a safety net;
+            // the margin keeps speech that starts right at the resume, whose VAD padding reaches back).
+            onEvent(.partial(channel, text: nil, start: start))
+
         case .partial(let text, let start, let end, let words):
             recordWordLatency(words, channel: channel, now: now)
             if channel == .them {
@@ -349,7 +425,10 @@ public actor CallSession {
         case .final(let text, let start, let end, let words, let openEnded):
             recordWordLatency(words, channel: channel, now: now)
             commitLatencies[channel, default: []].append(max(0, now - end))
-            var segment = TranscriptSegment(channel: channel, text: text, start: start, end: end)
+            // Speech right after a resume can reach back a little into the pause (VAD padding):
+            // it starts at the resume, so no line is timed inside an off-the-record stretch.
+            var segment = TranscriptSegment(
+                channel: channel, text: text, start: min(end, gate.resumeTime(covering: start) ?? start), end: end)
             if channel == .them {
                 segment.speaker = await tracker?.speaker(from: start, to: end)
                 if let speaker = segment.speaker {
@@ -466,7 +545,7 @@ public actor CallSession {
         let ordered = segments.sorted { $0.start < $1.start }
         let markdown = TranscriptFormat.markdown(
             title: config.title, startedAt: startedAt, duration: finalDuration ?? (now - origin), segments: ordered,
-            remoteSpeakers: remoteSpeakers, inProgress: finalDuration == nil)
+            remoteSpeakers: remoteSpeakers, inProgress: finalDuration == nil, markers: markers)
         try? markdown.write(to: folder.transcriptURL, atomically: true, encoding: .utf8)
     }
 
@@ -563,11 +642,15 @@ final class StereoAudioWriter: @unchecked Sendable {
 
 public enum CallSummary {
     /// Writes summary.md for a finished call and renames untitled calls after the summary's title.
+    /// - Parameter instructions: the user's extra instructions for summaries (may be empty).
     public static func write(
-        for result: inout CallResult, model: String, progress: @escaping @Sendable (String) -> Void = { _ in }
+        for result: inout CallResult, model: String, instructions: String = "",
+        progress: @escaping @Sendable (String) -> Void = { _ in }
     ) async throws -> SummaryResult {
-        let lines = TranscriptFormat.plainText(result.segments, remoteSpeakers: result.remoteSpeakers)
-        var summary = try await Summarizer(model: model).summarize(title: result.title, lines: lines, progress: progress)
+        let lines = TranscriptFormat.plainText(
+            result.segments, remoteSpeakers: result.remoteSpeakers, markers: result.markers)
+        var summary = try await Summarizer(model: model, extraInstructions: instructions).summarize(
+            title: result.title, lines: lines, progress: progress)
 
         if result.titleIsPlaceholder, let title = summary.suggestedTitle, !title.isEmpty {
             summary = SummaryResult(
@@ -577,7 +660,7 @@ public enum CallSummary {
             // Re-title the transcript and the folder to match.
             let transcript = TranscriptFormat.markdown(
                 title: title, startedAt: result.startedAt, duration: result.duration, segments: result.segments,
-                remoteSpeakers: result.remoteSpeakers, inProgress: false)
+                remoteSpeakers: result.remoteSpeakers, inProgress: false, markers: result.markers)
             try? transcript.write(to: result.folder.transcriptURL, atomically: true, encoding: .utf8)
             result.folder.rename(date: result.startedAt, title: title)
         }
@@ -587,13 +670,15 @@ public enum CallSummary {
 
     /// Re-summarizes a saved call from its transcript.md (used by "Regenerate Summary" and the CLI).
     public static func regenerate(
-        folder: URL, model: String, progress: @escaping @Sendable (String) -> Void = { _ in }
+        folder: URL, model: String, instructions: String = "", progress: @escaping @Sendable (String) -> Void = { _ in }
     ) async throws -> SummaryResult {
         let transcript = try String(contentsOf: folder.appendingPathComponent("transcript.md"), encoding: .utf8)
         var title = folder.lastPathComponent
         var lines: [String] = []
         for line in transcript.components(separatedBy: "\n") {
-            if line.hasPrefix("# ") {
+            if let marker = TranscriptFormat.parseMarkerLine(line) {
+                lines.append(TranscriptFormat.plainLine(marker))
+            } else if line.hasPrefix("# ") {
                 title = String(line.dropFirst(2))
             } else if line.hasPrefix("**["), let close = line.range(of: ":** ") {
                 // "**[00:12] Them 2:** text" → "[00:12] Them 2: text"
@@ -601,8 +686,17 @@ public enum CallSummary {
                 lines.append("\(head): \(line[close.upperBound...])")
             }
         }
-        let summary = try await Summarizer(model: model).summarize(title: title, lines: lines, progress: progress)
-        try summary.markdown.write(to: folder.appendingPathComponent("summary.md"), atomically: true, encoding: .utf8)
+        var summary = try await Summarizer(model: model, extraInstructions: instructions).summarize(
+            title: title, lines: lines, progress: progress)
+        // Keep the action items the user already ticked off (re-read now: they may have changed meanwhile).
+        let url = folder.appendingPathComponent("summary.md")
+        if let previous = try? String(contentsOf: url, encoding: .utf8) {
+            summary = SummaryResult(
+                markdown: ActionItems.carryingOver(from: previous, into: summary.markdown),
+                suggestedTitle: summary.suggestedTitle, model: summary.model, seconds: summary.seconds,
+                chunks: summary.chunks)
+        }
+        try summary.markdown.write(to: url, atomically: true, encoding: .utf8)
         return summary
     }
 

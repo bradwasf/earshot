@@ -16,6 +16,7 @@ enum Preference {
     static let summarize = "summarize"
     static let callsFolder = "callsFolder"
     static let detectCalls = "detectCalls"
+    static let summaryInstructions = "summaryInstructions"  // extra guidance added to every summary prompt
 
     static func register() {
         UserDefaults.standard.register(defaults: [
@@ -30,7 +31,12 @@ enum Preference {
             summarize: true,
             callsFolder: CallFolder.defaultRoot.path,
             detectCalls: true,
+            summaryInstructions: "",
         ])
+    }
+
+    static var summaryInstructionsText: String {
+        UserDefaults.standard.string(forKey: summaryInstructions) ?? ""
     }
 }
 
@@ -65,6 +71,10 @@ struct DisplayTurn: Identifiable, Equatable {
     let text: String
     /// 0 = Me, 1… = remote speakers (see `Theme.tone`).
     let tone: Int
+    /// Saved calls: Earshot's label for the speaker ("Them 2"), even after it was named.
+    var originalLabel: String? = nil
+    /// Saved calls: seconds into the call.
+    var start: Double? = nil
 }
 
 /// A finished call shown in the window (just recorded, or opened from the library).
@@ -74,6 +84,14 @@ struct CallDocument: Equatable {
     var detail: String
     var turns: [DisplayTurn]
     var summary: String?
+    /// Each speaker's share of the talking.
+    var talk: [TalkShare] = []
+    /// "42:10", as written in transcript.md.
+    var durationText: String? = nil
+    /// Notes, marks and pauses, drawn between the turns.
+    var markers: [DisplayMarker] = []
+    /// Names the user gave the speakers (label → name, e.g. "Me" → "Sam").
+    var speakerNames: [String: String] = [:]
 }
 
 /// A short confirmation shown at the bottom of the window ("Copied — paste it into Slack").
@@ -89,8 +107,13 @@ enum CallPrompt: Equatable {
     case join(CallApp)
     /// The call being recorded seems to be over: offer to stop.
     case ended(CallApp)
-    /// Confirmation after accepting `join`.
+    /// Confirmation after accepting `join` (or starting with the global shortcut).
     case transcribing(CallApp)
+    /// The call ended and "When a recorded call ends" is set to stop: a short countdown that
+    /// "Keep recording" cancels.
+    case stopping(CallApp)
+    /// Confirmation after stopping with the global shortcut.
+    case stopped(CallApp)
 }
 
 /// Rolling input levels for the waveform ribbon. Kept apart from `AppModel` so that twenty-odd
@@ -154,14 +177,22 @@ final class AppModel: ObservableObject {
 
     @Published var phase: Phase = .loading("Loading models…")
     @Published var screen: Screen = .home
-    @Published var tab: Tab = .transcript
+    @Published var tab: Tab = .transcript {
+        didSet { reader.tabChanged(to: tab) }
+    }
     /// Title typed for the next recording.
     @Published var title = ""
     @Published var liveTurns: [DisplayTurn] = []
+    /// Notes, marks and pauses of the call being recorded.
+    @Published var liveMarkers: [DisplayMarker] = []
+    /// Recording is paused ("off the record"): nothing is transcribed or saved.
+    @Published private(set) var paused = false
     @Published var partials: [Channel: String] = [:]
     @Published var elapsed: Double = 0
     @Published var warnings: [String] = []
-    @Published var document: CallDocument?
+    @Published var document: CallDocument? {
+        didSet { reader.documentChanged(from: oldValue, to: document) }
+    }
     @Published var library: [SavedCall] = []
     @Published var status = ""
     @Published var heardSystemAudio = false
@@ -174,8 +205,11 @@ final class AppModel: ObservableObject {
     @Published var sendingToSlack = false
 
     let meter = MeterModel()
+    /// Find, playback and speaker names for the finished call on screen.
+    let reader = CallReader()
 
     private var segments: [TranscriptSegment] = []
+    private var markers: [CallMarker] = []
     private var liveFolder: URL?
     private var models: SpeechModels?
     private var session: CallSession?
@@ -189,6 +223,12 @@ final class AppModel: ObservableObject {
     private var watchTimer: Timer?
     private var toastTask: Task<Void, Never>?
     let promptPanel = PromptPanelController()
+    // App shell (AppShell.swift): global shortcut, notifications, home-list keyboard.
+    let hotKey = GlobalHotKey()
+    let notifier = SummaryNotifier()
+    let home = HomeNavigator()
+    /// Opens (or brings forward) the main window; set by the window's view.
+    var openMainWindow: (() -> Void)?
 
     var isRecording: Bool { phase == .recording }
     var isBusy: Bool {
@@ -210,6 +250,7 @@ final class AppModel: ObservableObject {
         Task { await refreshSummaryModels() }
         slackReady = SlackSettings.webhookURL != nil
         startWatchingForCalls()
+        setUpAppShell()
     }
 
     // MARK: - Models
@@ -264,6 +305,9 @@ final class AppModel: ObservableObject {
         guard !isRecording, let loaded = Self.loadDocument(call.folder, date: call.date) else { return }
         document = loaded
         tab = loaded.summary != nil ? .summary : .transcript
+        // Opened from a search: show the query in the call, on the tab where it matches.
+        let query = search.trimmingCharacters(in: .whitespaces)
+        if !query.isEmpty { tab = reader.find(query, in: loaded, preferring: tab) }
         screen = .call
     }
 
@@ -280,7 +324,7 @@ final class AppModel: ObservableObject {
         refreshLibrary()
     }
 
-    private static func loadDocument(_ folder: URL, date: Date) -> CallDocument? {
+    static func loadDocument(_ folder: URL, date: Date) -> CallDocument? {
         guard let loaded = CallLibrary.load(folder: folder) else { return nil }
         let formatter = DateFormatter()
         formatter.dateFormat = "EEE d MMM yyyy · HH:mm"
@@ -289,10 +333,17 @@ final class AppModel: ObservableObject {
         let turns = loaded.turns.map {
             DisplayTurn(
                 id: "saved-\($0.id)", label: $0.label, time: $0.time, text: $0.text,
-                tone: Theme.tone(channel: $0.channel, speaker: $0.speaker))
+                tone: Theme.tone(channel: $0.channel, speaker: $0.speaker),
+                originalLabel: $0.originalLabel.isEmpty ? nil : $0.originalLabel, start: TranscriptFormat.seconds($0.time))
+        }
+        let markers = loaded.markers.map {
+            DisplayMarker($0.marker, id: "saved-marker-\($0.id)", afterTurns: $0.afterTurns)
         }
         return CallDocument(
-            folder: folder, title: loaded.title, detail: detail, turns: turns, summary: CallLibrary.summary(folder: folder))
+            folder: folder, title: loaded.title, detail: detail, turns: turns, summary: CallLibrary.summary(folder: folder),
+            talk: TalkTime.shares(loaded.turns, duration: loaded.duration.flatMap { TranscriptFormat.seconds($0) }),
+            durationText: loaded.duration,
+            markers: markers, speakerNames: loaded.names)
     }
 
     // MARK: - Recording
@@ -312,14 +363,17 @@ final class AppModel: ObservableObject {
     func start(placeholder: String? = nil) async {
         await loadModels()
         guard phase == .idle, let models else { return }
+        // Stop any playback first: the system-audio tap would transcribe it.
+        reader.player.pause()
         phase = .starting
         if case .join = promptPanel.current { promptPanel.dismiss() }
         let defaults = UserDefaults.standard
 
         // Microphone permission (the system-audio prompt appears when the tap opens).
-        var captureMicrophone = defaults.string(forKey: Preference.microphone) != "off"
+        let fed = feedFiles.compactMapValues(Self.fileSource)
+        var captureMicrophone = fed.isEmpty ? defaults.string(forKey: Preference.microphone) != "off" : fed[.me] != nil
         var startWarnings: [String] = []
-        if captureMicrophone {
+        if captureMicrophone && fed.isEmpty {
             let granted = await AVCaptureDevice.requestAccess(for: .audio)
             if !granted {
                 captureMicrophone = false
@@ -330,7 +384,7 @@ final class AppModel: ObservableObject {
         }
 
         let systemAudio: SystemAudioChoice
-        switch defaults.string(forKey: Preference.systemSource) ?? "tap" {
+        switch fed.isEmpty ? defaults.string(forKey: Preference.systemSource) ?? "tap" : fed[.them] != nil ? "tap" : "none" {
         case "tap": systemAudio = .tap
         case "none": systemAudio = .none
         case let uid:
@@ -355,7 +409,10 @@ final class AppModel: ObservableObject {
             echoTextGuard: defaults.bool(forKey: Preference.echoGuard))
 
         segments = []
+        markers = []
         liveTurns = []
+        liveMarkers = []
+        paused = false
         partials = [:]
         warnings = startWarnings
         heardSystemAudio = false
@@ -363,7 +420,8 @@ final class AppModel: ObservableObject {
         peakLevels = [:]
         meter.reset()
 
-        let session = CallSession(config: config, models: models) { [weak self] event in
+        let session = CallSession(config: config, models: models, microphone: fed[.me], system: fed[.them]) {
+            [weak self] event in
             Task { @MainActor in self?.handle(event) }
         }
         do {
@@ -383,6 +441,7 @@ final class AppModel: ObservableObject {
         phase = .recording
         status = "Saving to \(liveFolder?.lastPathComponent ?? "…") as you talk"
         Log.write("recording started: system=\(systemAudio) mic=\(captureMicrophone)")
+        runLiveScript()
 
         timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
             Task { @MainActor in
@@ -399,15 +458,17 @@ final class AppModel: ObservableObject {
     func stop() async {
         guard phase == .recording, let session else { return }
         phase = .finishing("Finishing transcript…")
-        if case .ended = promptPanel.current { promptPanel.dismiss() }
+        if promptPanel.current?.offersToStop == true { promptPanel.dismiss() }
         timer?.invalidate()
         timer = nil
         guard var result = await session.stop() else {
             phase = .idle
             screen = .home
+            paused = false
             return
         }
         self.session = nil
+        paused = false
         partials = [:]
         meter.reset()
         title = ""
@@ -426,8 +487,11 @@ final class AppModel: ObservableObject {
             let model = UserDefaults.standard.string(forKey: Preference.summaryModel) ?? Summarizer.defaultModel
             phase = .finishing("Summarizing with \(model)…")
             tab = .summary
+            var summaryError: Error?
             do {
-                let written = try await CallSummary.write(for: &result, model: model) { message in
+                let written = try await CallSummary.write(
+                    for: &result, model: model, instructions: Preference.summaryInstructionsText
+                ) { message in
                     Task { @MainActor in
                         if case .finishing = self.phase { self.phase = .finishing(message) }
                     }
@@ -436,12 +500,14 @@ final class AppModel: ObservableObject {
                 Log.write("summary written with \(model) in \(Int(written.seconds)) s")
             } catch {
                 CallSummary.writeFailure(folder: result.folder.url, title: result.title, error: error)
+                summaryError = error
                 warnings.append(error.localizedDescription)
                 status = "Transcript saved (the summary failed)"
                 Log.write("summary failed: \(error.localizedDescription)")
             }
             // The summary may have renamed the call; show what is on disk now.
             document = Self.loadDocument(result.folder.url, date: result.startedAt) ?? document
+            notifySummary(folder: result.folder.url, error: summaryError)
         } else {
             status = result.segments.isEmpty ? "No speech was detected" : "Transcript saved"
         }
@@ -458,16 +524,20 @@ final class AppModel: ObservableObject {
         document?.summary = nil
         Task {
             do {
-                let written = try await CallSummary.regenerate(folder: folder, model: model) { message in
+                let written = try await CallSummary.regenerate(
+                    folder: folder, model: model, instructions: Preference.summaryInstructionsText
+                ) { message in
                     Task { @MainActor in
                         if case .finishing = self.phase { self.phase = .finishing(message) }
                     }
                 }
                 document?.summary = written.markdown
                 status = "Summary regenerated"
+                notifySummary(folder: folder, error: nil)
             } catch {
                 document?.summary = CallLibrary.summary(folder: folder)
                 warnings.append(error.localizedDescription)
+                notifySummary(folder: folder, error: error)
             }
             phase = .idle
             refreshLibrary()
@@ -495,6 +565,44 @@ final class AppModel: ObservableObject {
         }
     }
 
+    // MARK: - Notes, marks and pause
+
+    /// Drops a note into the live transcript. `typingSince` is when the user began typing it, so
+    /// the note lands at the moment it is about, not when Return was pressed.
+    func addNote(_ text: String, typingSince: Date? = nil) {
+        guard isRecording, let session else { return }
+        let secondsAgo = typingSince.map { Date().timeIntervalSince($0) } ?? 0
+        Task {
+            guard let marker = await session.addNote(text, secondsAgo: secondsAgo) else { return }
+            upsert(marker)
+            if marker.kind == .mark { show(Toast(text: "Marked \(TranscriptFormat.timestamp(marker.start))", symbol: "bookmark.fill")) }
+        }
+    }
+
+    /// Marks this moment as important (⌘B), with no text.
+    func addMark() { addNote("") }
+
+    /// Pauses or resumes capture (⇧⌘P). Stopping while paused is fine.
+    func togglePause() { setPaused(!paused) }
+
+    private func setPaused(_ target: Bool) {
+        guard isRecording, let session else { return }
+        Task {
+            if let marker = await session.setPaused(target) { upsert(marker) }
+            paused = await session.isPaused
+            Log.write(paused ? "recording paused" : "recording resumed")
+        }
+    }
+
+    private func upsert(_ marker: CallMarker) {
+        if let index = markers.firstIndex(where: { $0.id == marker.id }) {
+            markers[index] = marker
+        } else {
+            markers.append(marker)
+        }
+        rebuildLiveTurns()
+    }
+
     // MARK: - Editing saved calls
 
     /// Retitles the call on screen (headings in both files, and the folder name).
@@ -511,6 +619,41 @@ final class AppModel: ObservableObject {
         } catch {
             warnings.append("Could not rename the call: \(error.localizedDescription)")
         }
+    }
+
+    /// Speakers can be named in a finished call, but not while a call is recorded or summarized.
+    var canEditSpeakers: Bool {
+        switch phase {
+        case .idle, .loading, .failed: return document != nil
+        case .starting, .recording, .finishing: return false
+        }
+    }
+
+    /// Names a speaker of the call on screen (nil or empty reverts to Earshot's label) in
+    /// transcript.md and summary.md. Returns a message to show when that is not possible.
+    func renameSpeaker(_ label: String, to name: String?) -> String? {
+        guard canEditSpeakers, let current = document else { return "Names can be changed once the call is saved." }
+        do {
+            let shown = try SpeakerNames.rename(folder: current.folder, label: label, to: name)
+            if var updated = Self.loadDocument(current.folder, date: Date()) {
+                updated.detail = current.detail
+                document = updated
+            }
+            refreshLibrary()
+            show(Toast(text: shown == label ? "Back to “\(label)”" : "\(label) is now “\(shown)”"))
+            Log.write("speaker renamed")
+            return nil
+        } catch {
+            return error.localizedDescription
+        }
+    }
+
+    /// Copies one turn: its text, or "[12:03] Priya: …".
+    func copyTurn(_ turn: DisplayTurn, withSpeaker: Bool) {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(withSpeaker ? "[\(turn.time)] \(turn.label): \(turn.text)" : turn.text, forType: .string)
+        show(Toast(text: "Copied"))
     }
 
     /// Moves a saved call to the Trash.
@@ -563,7 +706,7 @@ final class AppModel: ObservableObject {
             show(Toast(text: "Summary copied"))
         case .transcript:
             guard let document, !document.turns.isEmpty else { return }
-            let lines = document.turns.map { "[\($0.time)] \($0.label): \($0.text)" }
+            let lines = TranscriptRow.merge(turns: document.turns, markers: document.markers).map(\.plainText)
             pasteboard.clearContents()
             pasteboard.setString(([document.title, document.detail, ""] + lines).joined(separator: "\n"), forType: .string)
             show(Toast(text: "Transcript copied"))
@@ -601,6 +744,13 @@ final class AppModel: ObservableObject {
         let summary = document.folder.appendingPathComponent("summary.md")
         var lines = ["Here is a call I transcribed with Earshot: \"\(document.title)\" (\(document.detail))."]
         lines.append("Full transcript, with speakers and times: \(transcript)")
+        // Named speakers (the transcript already uses the names; say which one is me).
+        var named: [String] = []
+        for turn in document.turns where turn.originalLabel != nil && turn.label != turn.originalLabel {
+            let entry = turn.originalLabel == "Me" ? "\(turn.label) (me)" : turn.label
+            if !named.contains(entry) { named.append(entry) }
+        }
+        if !named.isEmpty { lines.append("Speakers: \(named.joined(separator: ", ")).") }
         if document.summary != nil { lines.append("Summary: \(summary.path)") }
         lines.append("Read them, then help me with follow-ups from this call.")
         guard let url = GrokBotLink.prompt(lines.joined(separator: " ")) else { return }
@@ -645,11 +795,22 @@ final class AppModel: ObservableObject {
             case .joined(let app):
                 Log.write("call joined: \(app.id)")
                 // One offer per call, and none while a recording is already running.
-                if !isRecording && phase != .starting { present(.join(app)) }
+                if !isRecording && phase != .starting {
+                    present(.join(app))
+                } else if isRecording, promptPanel.current?.offersToStop == true {
+                    // The call came back after a short drop: withdraw the offer to stop.
+                    promptPanel.dismiss()
+                }
             case .ended(let app):
                 Log.write("call ended: \(app.id)")
                 if promptPanel.current == .join(app) { promptPanel.dismiss() }
-                if isRecording && detector.active.isEmpty { present(.ended(app)) }
+                if isRecording && detector.active.isEmpty {
+                    switch callEndAction {
+                    case .ask: present(.ended(app))
+                    case .stop: present(.stopping(app))
+                    case .keep: break
+                    }
+                }
             }
         }
     }
@@ -662,8 +823,8 @@ final class AppModel: ObservableObject {
             guard promptPanel.current == prompt else { return }
             switch prompt {
             case .join(let app): acceptCall(app)
-            case .ended: acceptCallEnded()
-            case .transcribing: break
+            case .ended, .stopping: acceptCallEnded()
+            case .transcribing, .stopped: break
             }
         }
     }
@@ -726,14 +887,50 @@ final class AppModel: ObservableObject {
             if let speaker = segment.speaker { speakerTime[speaker, default: 0] += segment.end - segment.start }
         }
         let remoteSpeakers = speakerTime.values.filter { $0 >= 3 }.count
-        liveTurns = TranscriptFormat.turns(segments, remoteSpeakers: remoteSpeakers).map {
-            DisplayTurn(
-                id: $0.id, label: $0.label, time: TranscriptFormat.timestamp($0.start), text: $0.text,
-                tone: remoteSpeakers > 1 ? Theme.tone(channel: $0.channel, speaker: $0.speaker) : ($0.channel == .me ? 0 : 1))
+        var turns: [DisplayTurn] = []
+        var displayMarkers: [DisplayMarker] = []
+        for entry in TranscriptFormat.entries(segments, markers: markers, remoteSpeakers: remoteSpeakers) {
+            switch entry {
+            case .turn(let turn):
+                turns.append(
+                    DisplayTurn(
+                        id: turn.id, label: turn.label, time: TranscriptFormat.timestamp(turn.start), text: turn.text,
+                        tone: remoteSpeakers > 1
+                            ? Theme.tone(channel: turn.channel, speaker: turn.speaker) : (turn.channel == .me ? 0 : 1)))
+            case .marker(let marker):
+                displayMarkers.append(DisplayMarker(marker, id: marker.id.uuidString, afterTurns: turns.count))
+            }
         }
+        liveTurns = turns
+        if liveMarkers != displayMarkers { liveMarkers = displayMarkers }
     }
 
     // MARK: - Helpers
+
+    /// A 16 kHz WAV played in real time as if it were a capture device (`--feed-them`, `--feed-me`).
+    private static func fileSource(_ url: URL) -> FileAudioSource? {
+        guard let file = try? AVAudioFile(forReading: url), file.processingFormat.sampleRate == Double(Audio.sampleRate),
+            let buffer = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: AVAudioFrameCount(file.length)),
+            (try? file.read(into: buffer)) != nil, let channel = buffer.floatChannelData?[0]
+        else { return nil }
+        let samples = Array(UnsafeBufferPointer(start: channel, count: Int(buffer.frameLength)))
+        return FileAudioSource(samples: samples, label: url.lastPathComponent)
+    }
+
+    private func runLiveScript() {
+        for step in liveScript {
+            Task {
+                try? await Task.sleep(nanoseconds: UInt64(step.seconds * 1e9))
+                switch step.action {
+                case "note": addNote(step.text)
+                case "mark": addMark()
+                case "pause": setPaused(true)
+                case "resume": setPaused(false)
+                default: break
+                }
+            }
+        }
+    }
 
     /// "Zoom call", "FaceTime call"… when a meeting app is running; otherwise "Call".
     static func placeholderTitle() -> String {
@@ -757,10 +954,19 @@ final class AppModel: ObservableObject {
     // Launch arguments used by the end-to-end test:
     //   --autostart --stop-after 60 --title "X" --exit-when-done --appearance light|dark --open-latest
     //   --watch-app <bundle-id-prefix>   also treat that app as a meeting app (tests the detector)
-    //   --simulate-prompt join|ended|transcribing   show the floating prompt at launch (screenshots)
+    //   --simulate-prompt join|ended|transcribing|stopping|stopped [app]   show the floating prompt at launch (screenshots)
     private var autoStart = false
     //   --accept-prompts                 answer every prompt with its main button (end-to-end test)
     //   --send-to-grok                   with --open-latest, run Export › Send to Grok Bot at launch
+    //   --search <query>                 type into the home search (with --open-latest: open the call from it)
+    //   --find <query>                   with --open-latest, open the find bar on that query
+    //   --seek <seconds>                 with --open-latest, move the recording's playhead there (no sound)
+    //   --name-speaker <turn number>     with --open-latest, open the speaker-name editor on that turn
+    //   --window-size <W>x<H>            set the main window's content size at launch (screenshots)
+    //   --feed-them FILE --feed-me FILE  record from 16 kHz WAV files instead of the devices (no permissions)
+    //   --live-script "mark@5,note@8=Ask about pricing,pause@10,resume@16"   act at call seconds while recording
+    private var feedFiles: [Channel: URL] = [:]
+    private var liveScript: [(seconds: Double, action: String, text: String)] = []
     private var extraWatchedApps: [CallApp] = []
     private var autoAcceptPrompts = false
 
@@ -775,6 +981,19 @@ final class AppModel: ObservableObject {
             title = arguments[index + 1]
         }
         autoAcceptPrompts = arguments.contains("--accept-prompts")
+        for (flag, channel) in [("--feed-them", Channel.them), ("--feed-me", .me)] {
+            if let index = arguments.firstIndex(of: flag), index + 1 < arguments.count {
+                feedFiles[channel] = URL(fileURLWithPath: arguments[index + 1])
+            }
+        }
+        if let index = arguments.firstIndex(of: "--live-script"), index + 1 < arguments.count {
+            liveScript = arguments[index + 1].split(separator: ",").compactMap { item in
+                let (head, text) = item.firstIndex(of: "=").map { (item[..<$0], String(item[item.index(after: $0)...])) } ?? (item[...], "")
+                let parts = head.split(separator: "@")
+                guard parts.count == 2, let seconds = Double(parts[1]) else { return nil }
+                return (seconds, String(parts[0]), text)
+            }
+        }
         if let index = arguments.firstIndex(of: "--watch-app"), index + 1 < arguments.count {
             extraWatchedApps = [CallApp(id: "test", name: "Test", callName: "Test call", bundlePrefixes: [arguments[index + 1]])]
         }
@@ -783,12 +1002,36 @@ final class AppModel: ObservableObject {
             let app = CallApp.known.first { $0.id == (arguments.dropFirst(index + 2).first ?? "slack") } ?? CallApp.known[1]
             Task {
                 try? await Task.sleep(nanoseconds: 1_200_000_000)
-                promptPanel.show(kind == "ended" ? .ended(app) : kind == "transcribing" ? .transcribing(app) : .join(app), model: self)
+                let prompts: [String: CallPrompt] = [
+                    "ended": .ended(app), "transcribing": .transcribing(app), "stopping": .stopping(app),
+                    "stopped": .stopped(app),
+                ]
+                promptPanel.show(prompts[kind] ?? .join(app), model: self)
             }
+        }
+        if let index = arguments.firstIndex(of: "--search"), index + 1 < arguments.count {
+            search = arguments[index + 1]
         }
         if arguments.contains("--open-latest") {
             if let latest = CallLibrary.list(root: callsRoot).first { open(latest) }
             if arguments.contains("--transcript") { tab = .transcript }
+            if let index = arguments.firstIndex(of: "--find"), index + 1 < arguments.count {
+                reader.showFind()
+                reader.query = arguments[index + 1]
+            }
+            if let index = arguments.firstIndex(of: "--seek"), index + 1 < arguments.count,
+                let seconds = Double(arguments[index + 1])
+            {
+                reader.player.seek(to: seconds)
+            }
+            if let index = arguments.firstIndex(of: "--name-speaker"), index + 1 < arguments.count,
+                let number = Int(arguments[index + 1])
+            {
+                Task {
+                    try? await Task.sleep(nanoseconds: 1_000_000_000)
+                    reader.renamingTurn = "saved-\(number)"
+                }
+            }
             if arguments.contains("--send-to-grok") {
                 Task {
                     try? await Task.sleep(nanoseconds: 1_500_000_000)
