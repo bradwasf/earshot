@@ -61,9 +61,9 @@ Permissions are tied to the app's code signature. `scripts/build-app.sh` signs w
 1. Join your call as usual. Do not change any audio settings: your speakers or headphones and your microphone stay exactly as they are.
 2. Open Earshot (window, or the waveform icon in the menu bar) and press **Record** (⌘R). Optionally name the call first.
 3. The transcript scrolls live under a two-lane level display (Me above the line, Them below). The tinted card marked *live* is still being recognised; it becomes a regular card once the sentence is committed.
-4. While recording, type in **Add a note…** at the bottom and press Return to drop a note into the transcript (at the moment you started typing), or press **⌘B** (the bookmark button) to mark the moment. Press the pause button next to the timer (**⇧⌘P**) to go off the record; press it again to resume. Both are also in the **Call** menu and the menu-bar menu.
-5. Press the red timer button to stop. Earshot finishes the transcript, writes the summary and shows it as cards: In short, Key points, Decisions, Action items (with an owner chip; yours, owned by **Me**, are filled in), Open questions.
-6. The home screen lists your recent calls under day headers (Today, Yesterday, weekday names for the past week, then month and year); click one to read its transcript and summary again.
+4. While recording, type in **Add a note…** at the bottom and press Return to drop a note into the transcript (at the moment you started typing), or press **⌘B** (the **Mark** button) to mark the moment. Press the pause button next to the timer (**⇧⌘P**) to go off the record; press it again to resume. Both are also in the **Call** menu and the menu-bar menu.
+5. Press the red timer button to stop. Earshot finishes the transcript, writes the summary and shows it as cards: In short, Key points, Decisions, Action items (with an owner chip in that speaker's colour; yours, owned by **Me** or by the name you gave yourself, are filled in), Open questions.
+6. The home screen lists your recent calls under day headers (Today, Yesterday, weekday names for the past week, then month and year), each with its time, length and TL;DR; click one to read its transcript and summary again.
 
 Everything is saved as you go:
 
@@ -82,7 +82,7 @@ If you leave the title empty, the call is named after the meeting app that is ru
 
 Action items are saved in `summary.md` as a Markdown task list (`- [ ] **Me** — task`, `- [x] …` once done), which GitHub, Obsidian and most notes apps show as checkboxes. Tick an item off in the Summary tab and the change is written to that one line straight away; anything else you edited in the file is left alone. Summaries written before this (plain `- ` bullets) read as open items and get a checkbox when you first tick one.
 
-Above the recent calls, **Open action items** lists what is still unticked from the calls of the last 30 days, newest first, with the call each one came from (click it to open the call). Ticking one there updates that call's `summary.md` too. Click the heading to fold the list away; it disappears when everything is done.
+Above the recent calls, **Open action items** lists what is still unticked from the calls of the last 30 days, newest first, with its owner and the call it came from (click the call to open it); the heading counts how many are yours. Ticking one there updates that call's `summary.md` too. Click the heading to fold the list away; it disappears when everything is done.
 
 **Regenerate Summary** keeps your ticks: items in the new summary with the same task stay ticked, and ticked items it leaves out are added back to its action items as done.
 
@@ -204,7 +204,7 @@ Accuracy is on par for English, so speed and behaviour in silence decide. At hun
 
 **Summaries:** Ollama on localhost. The default model is `qwen3.5:4b-mlx`, chosen for speed (a 43-minute call is summarized in about 40 s). `qwen3.8:27b-mlx` writes slightly richer notes and is a one-click switch in Settings, at two to four times the wait on long calls. Transcripts longer than about 12,000 characters (roughly ten minutes of talk) are summarized in chunks: every chunk yields its decisions, action items and open questions, the lists are merged in code so nothing can be dropped by a second model pass, and the model then writes only the title and TL;DR. The context window is sized to each prompt, because Ollama's default silently truncates long input.
 
-**UI:** SwiftUI (window + menu-bar item), one process, no web server, with its own look in light and dark mode rather than stock controls (see `Sources/Earshot/Theme.swift`).
+**UI:** SwiftUI (window + menu-bar item), one process, no web server, with its own look in light and dark mode rather than stock controls: ink on paper, with colour kept for meaning (one hue per speaker, red for recording), a serif for what was said, and a reading column that stays a comfortable width in large windows. The design tokens are in `Sources/Earshot/Theme.swift` and the shared controls in `Sources/Earshot/Components.swift`.
 
 ## Measured performance
 
@@ -280,7 +280,7 @@ Sources/EarshotCore/Audio     capture: process tap, device input (mic / BlackHol
 Sources/EarshotCore/Speech    models, VAD + Parakeet streaming transcriber, Sortformer speakers, echo canceller
 Sources/EarshotCore/Session   call session, transcript + folder format, Ollama summarizer, export (Slack markup, webhook)
 Sources/EarshotCore/Detection which meeting apps hold the microphone, and the joined / ended state machine
-Sources/Earshot               SwiftUI app (window, menu bar, settings, call prompt card; Theme.swift holds colours and type)
+Sources/Earshot               SwiftUI app (window, menu bar, settings, call prompt card; Theme.swift holds the design tokens, Components.swift the shared controls)
 Sources/earshot-cli           headless CLI and test harness
 Tests/EarshotCoreTests        unit tests
 scripts/build-app.sh          builds and signs build/Earshot.app

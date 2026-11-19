@@ -34,7 +34,7 @@ open build/Earshot.app
 
 1. Fork the repository and create a branch from **`dev`** (not `prod`).
 2. Keep each pull request to one change. Small pull requests are reviewed faster.
-3. Follow the existing style: Swift API naming, no new dependencies without discussing them in an issue first, and UI colours and type from `Sources/Earshot/Theme.swift` rather than stock controls.
+3. Follow the existing style: Swift API naming, no new dependencies without discussing them in an issue first, and UI built from the design tokens in `Sources/Earshot/Theme.swift` and the shared controls in `Sources/Earshot/Components.swift` (buttons, chips, cards, fields, tabs) rather than stock controls or one-off styling.
 4. Add or update tests in `Tests/EarshotCoreTests` for logic in `EarshotCore`, and make sure `swift test` passes.
 5. If you change capture, transcription or the UI, try it in the real app and say how in the pull request.
 6. Update `README.md` or `SETUP.md` when behaviour changes.
