@@ -23,10 +23,13 @@ public struct SavedCall: Identifiable, Sendable, Equatable {
 public struct SavedTurn: Identifiable, Sendable, Equatable {
     public let id: Int
     public let time: String
+    /// What the transcript shows: Earshot's label, or the name the user gave the speaker.
     public let label: String
     public let channel: Channel
     public let speaker: Int?
     public let text: String
+    /// Earshot's own label for the speaker ("Me", "Them", "Them 2"), even when it was renamed.
+    public var originalLabel: String = ""
 }
 
 /// Reads calls back from ~/Earshot/Calls. The Markdown files are the only storage.
@@ -51,7 +54,8 @@ public enum CallLibrary {
                 date: values.creationDate ?? .distantPast,
                 duration: parsed.duration,
                 overview: summary.flatMap(overview(of:)),
-                searchText: ([title, summary ?? ""] + parsed.turns.map(\.text)).joined(separator: "\n").lowercased())
+                searchText: ([title, summary ?? ""] + speakerNames(parsed.turns) + parsed.turns.map(\.text))
+                    .joined(separator: "\n").lowercased())
         }
         .sorted { $0.date > $1.date }
     }
@@ -61,6 +65,11 @@ public enum CallLibrary {
         else { return nil }
         let parsed = parseTranscript(transcript)
         return (parsed.title ?? folder.lastPathComponent, parsed.duration, parsed.turns)
+    }
+
+    /// The names given to speakers in these turns, so searching for "Priya" finds her calls.
+    private static func speakerNames(_ turns: [SavedTurn]) -> [String] {
+        Array(Set(turns.filter { $0.label != $0.originalLabel }.map(\.label))).sorted()
     }
 
     public static func summary(folder: URL) -> String? {
@@ -108,22 +117,29 @@ public enum CallLibrary {
         var title: String?
         var duration: String?
         var turns: [SavedTurn] = []
+        // Speaker names (see `SpeakerNames`): name → Earshot's label.
+        var labelForName: [String: String] = [:]
         for line in text.components(separatedBy: "\n") {
             if title == nil, line.hasPrefix("# ") {
                 title = String(line.dropFirst(2)).trimmingCharacters(in: .whitespaces)
             } else if line.hasPrefix("- **Duration:** ") {
                 duration = line.dropFirst("- **Duration:** ".count).split(separator: " ").first.map(String.init)
+            } else if line.hasPrefix(SpeakerNames.headerPrefix) {
+                for (label, name) in SpeakerNames.parseHeader(line) where labelForName[name] == nil {
+                    labelForName[name] = label
+                }
             } else if line.hasPrefix("**["), let timeEnd = line.range(of: "] "), let labelEnd = line.range(of: ":** ") {
                 // **[00:12] Them 2:** text
                 let time = String(line[line.index(line.startIndex, offsetBy: 3)..<timeEnd.lowerBound])
                 guard timeEnd.upperBound <= labelEnd.lowerBound else { continue }
                 let label = String(line[timeEnd.upperBound..<labelEnd.lowerBound])
-                let isMe = label == "Me"
-                let speaker = isMe ? nil : Int(label.split(separator: " ").last ?? "")
+                let original = labelForName[label] ?? label
+                let isMe = original == "Me"
+                let speaker = isMe ? nil : Int(original.split(separator: " ").last ?? "")
                 turns.append(
                     SavedTurn(
                         id: turns.count, time: time, label: label, channel: isMe ? .me : .them, speaker: speaker,
-                        text: String(line[labelEnd.upperBound...])))
+                        text: String(line[labelEnd.upperBound...]), originalLabel: original))
             }
         }
         return (title, duration, turns)
