@@ -174,6 +174,8 @@ struct NoteComposer: View {
                     .font(.system(size: 13.5))
                     .foregroundStyle(Theme.ink)
                     .focused($focused)
+                    .accessibilityLabel("Add a note")
+                    .accessibilityHint("Return adds it to the transcript at the moment you started typing")
                     .onSubmit(submit)
                     .onChange(of: draft) { old, new in
                         if old.isEmpty && !new.isEmpty { typingSince = Date() }

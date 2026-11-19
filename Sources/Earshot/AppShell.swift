@@ -346,11 +346,13 @@ struct RecentCallsList: View {
     @EnvironmentObject private var model: AppModel
     @ObservedObject var navigator: HomeNavigator
     let calls: [SavedCall]
+    /// The reader around the home screen's scroll view (a reader inside it cannot scroll it).
+    let proxy: ScrollViewProxy
 
     var body: some View {
         let groups = CallGrouping.byDay(calls)
         // Not lazy, so that ↑/↓ can scroll to any row.
-        ScrollViewReader { proxy in
+        Group {
             VStack(alignment: .leading, spacing: Space.l) {
                 ForEach(groups) { group in
                     VStack(alignment: .leading, spacing: Space.s) {
@@ -378,7 +380,12 @@ struct RecentCallsList: View {
             }
             .onChange(of: navigator.selection) { _, folder in
                 guard let folder else { return }
-                withAnimation(Motion.standard) { proxy.scrollTo(folder) }
+                // Centred: SwiftUI places a bottom-anchored row about one row below the visible
+                // area here, so the armed "Move to Trash?" row could be off screen. Deferred one
+                // turn so the scroll view has the new selection's layout.
+                DispatchQueue.main.async {
+                    withAnimation(Motion.standard) { proxy.scrollTo(folder, anchor: .center) }
+                }
             }
             .task {
                 // Back from a call: bring the call that was open into view once the list is laid out.

@@ -252,7 +252,8 @@ struct RecordButton: View {
 
     private var label: String {
         switch model.phase {
-        case .recording: return model.paused ? "Paused" : TranscriptFormat.timestamp(model.elapsed)
+        // While paused the pause button, subtitle and waveform say so; this button still stops.
+        case .recording: return model.paused ? "Stop" : TranscriptFormat.timestamp(model.elapsed)
         case .loading: return "Loading"
         case .starting: return "Starting"
         case .finishing: return "Finishing"
@@ -453,6 +454,8 @@ struct HomeView: View {
         if model.library.isEmpty {
             welcome
         } else {
+            // The reader wraps the scroll view so ↑/↓ can bring the selected call into view.
+            ScrollViewReader { proxy in
             ScrollView {
                 VStack(alignment: .leading, spacing: Space.xl) {
                     OpenActionItemsSection()
@@ -462,7 +465,7 @@ struct HomeView: View {
                                 .frame(maxWidth: 230)
                         }
                         let calls = model.visibleLibrary
-                        RecentCallsList(navigator: model.home, calls: calls)
+                        RecentCallsList(navigator: model.home, calls: calls, proxy: proxy)
                         if calls.isEmpty {
                             VStack(spacing: 6) {
                                 Text("No calls mention “\(model.search.trimmingCharacters(in: .whitespaces))”")
@@ -482,6 +485,7 @@ struct HomeView: View {
                 .padding(.top, 20)
                 .padding(.bottom, Space.xl)
                 .background(OverlayScrollers())
+            }
             }
         }
     }

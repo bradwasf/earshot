@@ -43,15 +43,29 @@ extension AppModel {
         show(Toast(text: "Action items copied"))
     }
 
-    private var exportLines: [CallExport.Line] {
-        (document?.turns ?? []).map { (time: $0.time, label: $0.label, text: $0.text) }
+    /// The transcript with the user's notes, marks and pauses in place, as in the window.
+    private var exportLines: [CallExport.Entry] {
+        guard let document else { return [] }
+        return TranscriptRow.merge(turns: document.turns, markers: document.markers).map { row in
+            switch row {
+            case .turn(let turn): return .turn(time: turn.time, label: turn.label, text: turn.text)
+            case .marker(let marker):
+                let markdown: String
+                switch marker.kind {
+                case .note: markdown = "> **[\(marker.time)] Note:** \(marker.text)"
+                case .mark: markdown = "> **[\(marker.time)] Marked**"
+                case .pause: markdown = "> **[\(marker.time)] Paused** — off the record"
+                }
+                return .aside(markdown: markdown, plain: row.plainText)
+            }
+        }
     }
 
     /// One .md file with the summary and the full transcript.
     func saveMarkdown() {
         guard let document, summaryExport != nil || canExportTranscript else { return }
         let text = CallExport.markdown(
-            summary: summaryExport, title: document.title, detail: document.detail, lines: exportLines)
+            summary: summaryExport, title: document.title, detail: document.detail, entries: exportLines)
         save(
             text, name: CallExport.fileName(document.title, extension: "md"),
             type: UTType(filenameExtension: "md") ?? .plainText, confirmation: "Saved as Markdown")
@@ -60,7 +74,7 @@ extension AppModel {
     /// The transcript as a plain .txt file (the same text as Copy transcript).
     func saveTranscriptText() {
         guard let document, canExportTranscript else { return }
-        let text = CallExport.transcriptText(title: document.title, detail: document.detail, lines: exportLines)
+        let text = CallExport.transcriptText(title: document.title, detail: document.detail, entries: exportLines)
         save(
             text, name: CallExport.fileName(document.title, extension: "txt"), type: .plainText,
             confirmation: "Transcript saved")

@@ -287,6 +287,8 @@ struct SettingsFooter: View {
         Text(text)
             .font(TypeScale.caption)
             .foregroundStyle(color.map(AnyShapeStyle.init) ?? AnyShapeStyle(.secondary))
+            // Grouped-form footers centre or right-align wrapped lines otherwise.
+            .multilineTextAlignment(.leading)
             .frame(maxWidth: .infinity, alignment: .leading)
             .fixedSize(horizontal: false, vertical: true)
     }

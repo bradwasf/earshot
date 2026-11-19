@@ -187,4 +187,18 @@ final class ActionItemExportTests: XCTestCase {
         XCTAssertEqual(CallExport.fileName("Q3: plan / review?", extension: "md"), "Q3- plan - review.md")
         XCTAssertEqual(CallExport.fileName("  ", extension: "txt"), "Call.txt")
     }
+
+    func testExportsKeepNotesAndMarksInPlace() {
+        let entries: [CallExport.Entry] = [
+            .turn(time: "00:02", label: "Priya", text: "Hello."),
+            .aside(markdown: "> **[00:04] Note:** Ask about pricing", plain: "[00:04] Note: Ask about pricing"),
+            .turn(time: "00:05", label: "Me", text: "Hi."),
+        ]
+        XCTAssertEqual(
+            CallExport.markdown(summary: nil, title: "Sync", detail: nil, entries: entries),
+            "# Sync\n\n## Transcript\n\n**[00:02] Priya:** Hello.\n\n> **[00:04] Note:** Ask about pricing\n\n**[00:05] Me:** Hi.\n")
+        XCTAssertEqual(
+            CallExport.transcriptText(title: "Sync", detail: "Tue", entries: entries),
+            "Sync\nTue\n\n[00:02] Priya: Hello.\n[00:04] Note: Ask about pricing\n[00:05] Me: Hi.\n")
+    }
 }
