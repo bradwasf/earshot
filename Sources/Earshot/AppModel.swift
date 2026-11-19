@@ -90,6 +90,8 @@ struct CallDocument: Equatable {
     var durationText: String? = nil
     /// Notes, marks and pauses, drawn between the turns.
     var markers: [DisplayMarker] = []
+    /// Names the user gave the speakers (label → name, e.g. "Me" → "Sam").
+    var speakerNames: [String: String] = [:]
 }
 
 /// A short confirmation shown at the bottom of the window ("Copied — paste it into Slack").
@@ -341,7 +343,7 @@ final class AppModel: ObservableObject {
             folder: folder, title: loaded.title, detail: detail, turns: turns, summary: CallLibrary.summary(folder: folder),
             talk: TalkTime.shares(loaded.turns, duration: loaded.duration.flatMap { TranscriptFormat.seconds($0) }),
             durationText: loaded.duration,
-            markers: markers)
+            markers: markers, speakerNames: loaded.names)
     }
 
     // MARK: - Recording
@@ -952,7 +954,7 @@ final class AppModel: ObservableObject {
     // Launch arguments used by the end-to-end test:
     //   --autostart --stop-after 60 --title "X" --exit-when-done --appearance light|dark --open-latest
     //   --watch-app <bundle-id-prefix>   also treat that app as a meeting app (tests the detector)
-    //   --simulate-prompt join|ended|transcribing   show the floating prompt at launch (screenshots)
+    //   --simulate-prompt join|ended|transcribing|stopping|stopped [app]   show the floating prompt at launch (screenshots)
     private var autoStart = false
     //   --accept-prompts                 answer every prompt with its main button (end-to-end test)
     //   --send-to-grok                   with --open-latest, run Export › Send to Grok Bot at launch
@@ -960,6 +962,7 @@ final class AppModel: ObservableObject {
     //   --find <query>                   with --open-latest, open the find bar on that query
     //   --seek <seconds>                 with --open-latest, move the recording's playhead there (no sound)
     //   --name-speaker <turn number>     with --open-latest, open the speaker-name editor on that turn
+    //   --window-size <W>x<H>            set the main window's content size at launch (screenshots)
     //   --feed-them FILE --feed-me FILE  record from 16 kHz WAV files instead of the devices (no permissions)
     //   --live-script "mark@5,note@8=Ask about pricing,pause@10,resume@16"   act at call seconds while recording
     private var feedFiles: [Channel: URL] = [:]
@@ -999,7 +1002,11 @@ final class AppModel: ObservableObject {
             let app = CallApp.known.first { $0.id == (arguments.dropFirst(index + 2).first ?? "slack") } ?? CallApp.known[1]
             Task {
                 try? await Task.sleep(nanoseconds: 1_200_000_000)
-                promptPanel.show(kind == "ended" ? .ended(app) : kind == "transcribing" ? .transcribing(app) : .join(app), model: self)
+                let prompts: [String: CallPrompt] = [
+                    "ended": .ended(app), "transcribing": .transcribing(app), "stopping": .stopping(app),
+                    "stopped": .stopped(app),
+                ]
+                promptPanel.show(prompts[kind] ?? .join(app), model: self)
             }
         }
         if let index = arguments.firstIndex(of: "--search"), index + 1 < arguments.count {

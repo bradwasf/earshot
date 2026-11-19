@@ -79,8 +79,8 @@ struct TranscriptRowView: View {
     }
 }
 
-/// A note reads as the user's own aside (sans-serif on a dashed well, no speaker rule); marks
-/// and pauses are slim dividers across the transcript.
+/// A note reads as the user's own aside (sans-serif in a margin-note well, no speaker rule);
+/// marks and pauses are slim dividers across the transcript.
 struct MarkerView: View {
     let marker: DisplayMarker
 
@@ -103,13 +103,13 @@ struct MarkerView: View {
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(Theme.inkSoft)
             VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 7) {
-                    Eyebrow(text: "Your note")
-                    Spacer(minLength: 8)
-                    Text(marker.time).font(.stamp(10.5)).foregroundStyle(Theme.inkFaint)
+                HStack(spacing: Space.s) {
+                    Eyebrow(text: "Your note", color: Theme.inkSoft)
+                    Text(marker.time).font(TypeScale.stamp).foregroundStyle(Theme.inkFaint)
+                    Spacer(minLength: 0)
                 }
                 Text(marker.text)
-                    .font(.ui(14, .medium))
+                    .font(.system(size: 14, weight: .medium))
                     .foregroundStyle(Theme.ink)
                     .lineSpacing(2)
                     .fixedSize(horizontal: false, vertical: true)
@@ -117,13 +117,14 @@ struct MarkerView: View {
             }
         }
         .padding(.horizontal, 14)
-        .padding(.vertical, 10)
+        .padding(.vertical, 11)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Theme.well))
+        .background(RoundedRectangle(cornerRadius: Radius.l - 2, style: .continuous).fill(Theme.sunken))
         .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .strokeBorder(Theme.inkFaint.opacity(0.6), style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
+            RoundedRectangle(cornerRadius: Radius.l - 2, style: .continuous)
+                .strokeBorder(Theme.stroke, style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
         )
+        .padding(.vertical, 2)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Your note at \(marker.time): \(marker.text)")
     }
@@ -132,34 +133,25 @@ struct MarkerView: View {
         HStack(spacing: 10) {
             rule(dashed: dashed)
             HStack(spacing: 6) {
-                Image(systemName: symbol).font(.system(size: 10.5, weight: .semibold))
-                Text(text).font(.ui(11.5, .semibold))
-                Text(marker.isOpen ? "since \(marker.time)" : marker.time).font(.stamp(10.5)).foregroundStyle(Theme.inkFaint)
+                Image(systemName: symbol).font(.system(size: 10, weight: .semibold))
+                Text(text).font(TypeScale.captionStrong)
+                Text(marker.isOpen ? "since \(marker.time)" : marker.time).font(TypeScale.stamp).foregroundStyle(Theme.inkFaint)
             }
             .foregroundStyle(color)
             .padding(.horizontal, 11)
             .padding(.vertical, 5)
-            .background(Capsule().fill(Theme.well))
+            .background(Capsule().fill(Theme.surface))
+            .overlay(Capsule().strokeBorder(dashed ? Theme.stroke : Theme.hairline, style: StrokeStyle(lineWidth: 1, dash: dashed ? [3, 2] : [])))
             .fixedSize()
             rule(dashed: dashed)
         }
-        .padding(.vertical, 2)
+        .padding(.vertical, 6)
         .accessibilityElement(children: .combine)
     }
 
+    @ViewBuilder
     private func rule(dashed: Bool) -> some View {
-        Line()
-            .stroke(Theme.hairline, style: StrokeStyle(lineWidth: 1, dash: dashed ? [3, 3] : []))
-            .frame(height: 1)
-    }
-
-    private struct Line: Shape {
-        func path(in rect: CGRect) -> Path {
-            Path { path in
-                path.move(to: CGPoint(x: rect.minX, y: rect.midY))
-                path.addLine(to: CGPoint(x: rect.maxX, y: rect.midY))
-            }
-        }
+        if dashed { DashedRule() } else { Hairline() }
     }
 }
 
@@ -172,37 +164,44 @@ struct NoteComposer: View {
     @FocusState private var focused: Bool
 
     var body: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "square.and.pencil")
-                .font(.system(size: 12.5, weight: .semibold))
-                .foregroundStyle(focused ? Theme.me : Theme.inkFaint)
-            TextField("Add a note", text: $draft, prompt: Text("Add a note…").foregroundColor(Theme.inkFaint))
-                .textFieldStyle(.plain)
-                .font(.ui(13.5))
-                .foregroundStyle(Theme.ink)
-                .focused($focused)
-                .onSubmit(submit)
-                .onChange(of: draft) { old, new in
-                    if old.isEmpty && !new.isEmpty { typingSince = Date() }
-                    if new.isEmpty { typingSince = nil }
+        HStack(spacing: Space.s) {
+            HStack(spacing: Space.s) {
+                Image(systemName: "square.and.pencil")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(focused ? Theme.ink : Theme.inkFaint)
+                TextField("Add a note", text: $draft, prompt: Text("Add a note…").foregroundColor(Theme.inkFaint))
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 13.5))
+                    .foregroundStyle(Theme.ink)
+                    .focused($focused)
+                    .onSubmit(submit)
+                    .onChange(of: draft) { old, new in
+                        if old.isEmpty && !new.isEmpty { typingSince = Date() }
+                        if new.isEmpty { typingSince = nil }
+                    }
+                if !draft.trimmingCharacters(in: .whitespaces).isEmpty {
+                    HStack(spacing: 4) {
+                        KeyHint("↩")
+                        Text("to add").font(TypeScale.caption).foregroundStyle(Theme.inkFaint)
+                    }
+                    .fixedSize()
+                    .transition(.opacity)
                 }
-            if !draft.trimmingCharacters(in: .whitespaces).isEmpty {
-                Text("↩ to add").font(.ui(11)).foregroundStyle(Theme.inkFaint).fixedSize()
             }
+            .padding(.horizontal, 14)
+            .frame(height: 34)
+            .fieldChrome(focused: focused)
+            .animation(Motion.quick, value: draft.isEmpty)
             Button(action: model.addMark) {
                 Label("Mark", systemImage: "bookmark")
             }
-            .buttonStyle(GhostButtonStyle())
+            .buttonStyle(.secondary)
             .help("Mark this moment as important (⌘B)")
         }
-        .padding(.leading, 14)
-        .padding(.trailing, 6)
-        .padding(.vertical, 6)
-        .background(Capsule().fill(Theme.surface))
-        .overlay(Capsule().strokeBorder(focused ? Theme.me.opacity(0.5) : Theme.hairline))
-        .padding(.horizontal, 24)
-        .padding(.top, 8)
+        .readableColumn(gutter: Metrics.gutter - 8)
+        .padding(.top, 10)
         .padding(.bottom, 12)
+        .overlay(alignment: .top) { Hairline() }
         .disabled(!model.isRecording)
         .onAppear { focused = true }
     }
@@ -220,30 +219,14 @@ struct NoteComposer: View {
 /// Round control beside the record button: pause ("off the record") and resume.
 struct PauseButton: View {
     @EnvironmentObject private var model: AppModel
-    @State private var hovering = false
 
     var body: some View {
-        Button(action: model.togglePause) {
-            Image(systemName: model.paused ? "play.fill" : "pause.fill")
-                .font(.system(size: 14, weight: .bold))
-                .foregroundStyle(model.paused ? AnyShapeStyle(.white) : AnyShapeStyle(Theme.ink.opacity(0.85)))
-                .frame(width: 42, height: 42)
-                .background(
-                    Circle().fill(
-                        model.paused
-                            ? AnyShapeStyle(Theme.accentGradient)
-                            : AnyShapeStyle(hovering ? Theme.surfaceHover : Theme.surface))
-                )
-                .overlay(Circle().strokeBorder(model.paused ? .white.opacity(0.22) : Theme.hairline))
-                .shadow(color: Color(hex: 0x0EA5E9).opacity(model.paused ? 0.4 : 0), radius: 10, y: 4)
-                .scaleEffect(hovering ? 1.04 : 1)
-                .animation(.snappy(duration: 0.18), value: hovering)
-                .contentShape(Circle())
-        }
-        .buttonStyle(.plain)
-        .onHover { hovering = $0 }
-        .help(model.paused ? "Resume recording (⇧⌘P)" : "Pause: go off the record (⇧⌘P)")
-        .accessibilityLabel(model.paused ? "Resume recording" : "Pause recording")
+        IconButton(
+            symbol: model.paused ? "play.fill" : "pause.fill",
+            label: model.paused ? "Resume recording" : "Pause recording",
+            help: model.paused ? "Resume recording (⇧⌘P)" : "Pause: go off the record (⇧⌘P)",
+            size: 40, style: model.paused ? .primary : .secondary,
+            action: model.togglePause)
     }
 }
 

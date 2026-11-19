@@ -1,7 +1,8 @@
 import EarshotCore
 import SwiftUI
 
-/// The single window: header (title + record control), then home, live call or finished call.
+/// The single window: header (title + record control), then home, live call or finished call,
+/// then a footer of quiet actions.
 struct ContentView: View {
     @EnvironmentObject private var model: AppModel
     @Environment(\.openSettings) private var openSettings
@@ -9,7 +10,9 @@ struct ContentView: View {
     var body: some View {
         VStack(spacing: 0) {
             HeaderView()
-            if !model.warnings.isEmpty { WarningsView() }
+            if !model.warnings.isEmpty {
+                WarningsView().transition(.opacity.combined(with: .move(edge: .top)))
+            }
             Group {
                 switch model.screen {
                 case .home: HomeView()
@@ -18,35 +21,47 @@ struct ContentView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .transition(.opacity)
             FooterView()
         }
         .frame(minWidth: 480, minHeight: 520)
-        .background(Theme.background.ignoresSafeArea())
+        .background(Theme.canvas.ignoresSafeArea())
         .background(WindowChrome())
         .overlay(alignment: .top) {
             // Wordmark in the (hidden) title bar.
             Text("EARSHOT")
-                .font(.ui(10.5, .bold))
-                .tracking(2.4)
+                .font(.system(size: 10, weight: .bold))
+                .tracking(2.6)
                 .foregroundStyle(Theme.inkFaint)
                 .frame(height: 28)
                 .ignoresSafeArea(edges: .top)
                 .allowsHitTesting(false)
+                .accessibilityHidden(true)
         }
         .overlay(alignment: .bottom) {
             if let toast = model.toast {
                 ToastView(toast: toast)
-                    .padding(.bottom, model.screen == .live ? 110 : 54)
-                    .transition(.opacity.combined(with: .move(edge: .bottom)))
+                    .padding(.bottom, toastOffset)
+                    .transition(.opacity.combined(with: .move(edge: .bottom)).combined(with: .scale(scale: 0.96)))
             }
         }
-        .tint(Theme.me)
+        .tint(Theme.focus)
         .modifier(AppShellHooks())
-        .animation(.snappy(duration: 0.28), value: model.screen)
-        .animation(.snappy(duration: 0.22), value: model.toast)
+        .animation(Motion.screen, value: model.screen)
+        .animation(Motion.standard, value: model.toast)
+        .animation(Motion.standard, value: model.warnings.isEmpty)
         .onAppear {
             // `--show-settings` opens the settings window at launch (used for screenshots).
             if CommandLine.arguments.contains("--show-settings") { openSettings() }
+        }
+    }
+
+    /// Clear of the footer, the note composer and the player bar.
+    private var toastOffset: CGFloat {
+        switch model.screen {
+        case .live: return model.isRecording ? 104 : 56
+        case .call: return model.reader.hasAudio ? 104 : 56
+        case .home: return 56
         }
     }
 }
@@ -58,45 +73,39 @@ struct HeaderView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(alignment: .center, spacing: 16) {
-                VStack(alignment: .leading, spacing: 4) {
+            HStack(alignment: .center, spacing: Space.l) {
+                VStack(alignment: .leading, spacing: 6) {
                     if model.screen == .call {
-                        Button(action: model.goHome) {
-                            Label("All calls", systemImage: "chevron.left")
-                                .font(.ui(11.5, .semibold))
-                                .foregroundStyle(Theme.me)
+                        LinkButton(title: "All calls", symbol: "chevron.left", font: TypeScale.calloutStrong) {
+                            model.goHome()
                         }
-                        .buttonStyle(.plain)
                         .disabled(model.isBusy)
+                        .help("Back to all calls (Esc or ⌘[)")
                     }
                     titleView
-                    subtitle
+                    StatusLine()
                 }
-                Spacer(minLength: 8)
-                if model.screen == .live && model.isRecording { PauseButton() }
-                RecordButton(meter: model.meter)
+                Spacer(minLength: Space.s)
+                HStack(spacing: Space.s) {
+                    if model.screen == .live && model.isRecording {
+                        PauseButton().transition(.scale(scale: 0.8).combined(with: .opacity))
+                    }
+                    RecordButton(meter: model.meter)
+                }
             }
-            .padding(.horizontal, 24)
+            .readableColumn()
             .padding(.top, 6)
-            .padding(.bottom, 16)
+            .padding(.bottom, Space.l)
+            .animation(Motion.standard, value: model.isRecording)
 
             if model.screen == .live {
-                WaveRibbon(meter: model.meter)
-                    .opacity(model.paused ? 0.35 : 1)
-                    .overlay {
-                        if model.paused {
-                            Label("Paused — off the record", systemImage: "pause.circle.fill")
-                                .font(.ui(12, .semibold))
-                                .foregroundStyle(Theme.inkSoft)
-                        }
-                    }
-                    .animation(.snappy(duration: 0.2), value: model.paused)
-                    .frame(height: 58)
-                    .padding(.horizontal, 24)
-                    .padding(.bottom, 14)
+                WaveRibbon(meter: model.meter, paused: model.paused)
+                    .frame(height: 62)
+                    .readableColumn()
+                    .padding(.bottom, Space.l)
                     .transition(.opacity.combined(with: .move(edge: .top)))
             }
-            Rectangle().fill(Theme.hairline).frame(height: 1)
+            Hairline()
         }
     }
 
@@ -104,40 +113,65 @@ struct HeaderView: View {
     private var titleView: some View {
         switch model.screen {
         case .home:
-            TextField("Name this call (optional)", text: $model.title)
-                .textFieldStyle(.plain)
-                .font(.ui(22, .semibold))
-                .foregroundStyle(Theme.ink)
-                .disabled(model.isBusy)
-                .onSubmit { model.toggle() }
+            TextField(
+                "Name this call (optional)", text: $model.title,
+                prompt: Text("Name this call (optional)").foregroundColor(Theme.inkFaint)
+            )
+            .textFieldStyle(.plain)
+            .font(TypeScale.display)
+            .foregroundStyle(Theme.ink)
+            .disabled(model.isBusy)
+            .onSubmit { model.toggle() }
         case .live:
             Text(model.title.isEmpty ? "Untitled call" : model.title)
-                .font(.ui(22, .semibold))
+                .font(TypeScale.display)
                 .foregroundStyle(Theme.ink)
                 .lineLimit(1)
         case .call:
             EditableTitle()
         }
     }
+}
 
-    private var subtitle: some View {
+/// The line under the title: what Earshot is doing right now.
+private struct StatusLine: View {
+    @EnvironmentObject private var model: AppModel
+    @State private var pulse = false
+
+    var body: some View {
         HStack(spacing: 6) {
-            if model.isBusy {
-                ProgressView().controlSize(.mini)
-            } else if model.screen == .live && model.paused {
-                Image(systemName: "pause.fill").font(.system(size: 8, weight: .bold)).foregroundStyle(Theme.inkSoft)
-            } else if model.screen == .live {
-                Circle().fill(Theme.record).frame(width: 6, height: 6)
-            }
-            Text(subtitleText)
-                .font(.ui(12.5))
+            indicator.frame(width: 10)
+            Text(text)
+                .font(TypeScale.callout)
                 .foregroundStyle(Theme.inkSoft)
                 .lineLimit(1)
-                .truncationMode(.middle)
+                .truncationMode(.tail)
+                .help(text)
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    @ViewBuilder
+    private var indicator: some View {
+        if model.isBusy {
+            ProgressView().controlSize(.mini)
+        } else if model.screen == .live && model.paused {
+            Image(systemName: "pause.fill").font(.system(size: 8, weight: .bold)).foregroundStyle(Theme.inkSoft)
+        } else if model.screen == .live {
+            Dot(color: Theme.record, size: 7)
+                .opacity(pulse ? 0.35 : 1)
+                .animation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true), value: pulse)
+                .onAppear { pulse = true }
+        } else if model.screen == .home, case .idle = model.phase {
+            Image(systemName: "lock.fill").font(.system(size: 8.5, weight: .semibold)).foregroundStyle(Theme.inkFaint)
+        } else if case .failed = model.phase {
+            Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 9)).foregroundStyle(Theme.caution)
+        } else {
+            EmptyView()
         }
     }
 
-    private var subtitleText: String {
+    private var text: String {
         switch model.phase {
         case .loading(let message), .finishing(let message), .failed(let message): return message
         case .starting: return "Starting…"
@@ -151,48 +185,44 @@ struct HeaderView: View {
     }
 }
 
-/// The one primary control: a glowing capsule that starts and stops a recording.
+/// The one primary control: an ink capsule with a red dot that starts a recording, and turns
+/// red with the running time while recording.
 struct RecordButton: View {
     @EnvironmentObject private var model: AppModel
     @ObservedObject var meter: MeterModel
+    @Environment(\.colorScheme) private var colorScheme
     @State private var hovering = false
 
     var body: some View {
         Button(action: model.toggle) {
-            HStack(spacing: 8) {
-                if model.isBusy {
-                    ProgressView().controlSize(.small).tint(.white)
-                } else if model.isRecording {
-                    RoundedRectangle(cornerRadius: 3, style: .continuous).fill(.white).frame(width: 12, height: 12)
-                } else {
-                    Circle().fill(.white).frame(width: 12, height: 12)
-                }
+            HStack(spacing: 9) {
+                indicator.frame(width: 14, height: 14)
                 Text(label)
-                    .font(.ui(14.5, .semibold))
+                    .font(.system(size: 14, weight: .semibold))
                     .monospacedDigit()
-                    .foregroundStyle(.white)
+                    .lineLimit(1)
             }
+            .foregroundStyle(Theme.onInk)
             .padding(.horizontal, 18)
-            .frame(minWidth: 124, minHeight: 42)
-            .background(Capsule().fill(model.isRecording ? Theme.recordGradient : Theme.accentGradient))
-            .overlay(Capsule().strokeBorder(.white.opacity(0.22), lineWidth: 1))
-            .shadow(color: glow.opacity(disabled ? 0 : 0.42), radius: hovering ? 14 : 10, y: 4)
+            .frame(minWidth: 116, minHeight: 40)
+            .background(Capsule().fill(fill))
+            .shadow(color: .black.opacity(disabled ? 0 : hovering ? 0.22 : 0.14), radius: hovering ? 9 : 6, y: 3)
             .background {
                 if model.isRecording && !model.paused {
                     // Halo that breathes with the loudest input.
                     Capsule()
                         .stroke(Theme.record.opacity(0.35), lineWidth: 2)
-                        .scaleEffect(x: 1 + 0.10 * CGFloat(meter.latest), y: 1 + 0.42 * CGFloat(meter.latest))
+                        .scaleEffect(x: 1 + 0.08 * CGFloat(meter.latest), y: 1 + 0.36 * CGFloat(meter.latest))
                         .animation(.easeOut(duration: 0.18), value: meter.latest)
                 }
             }
-            .saturation(disabled ? 0.35 : 1)
-            .opacity(disabled ? 0.6 : 1)
-            .scaleEffect(hovering && !disabled ? 1.03 : 1)
-            .animation(.snappy(duration: 0.18), value: hovering)
+            .opacity(disabled ? 0.55 : 1)
             .contentShape(Capsule())
+            .contentShape(.focusEffect, Capsule())
+            .animation(Motion.quick, value: hovering)
+            .animation(Motion.standard, value: model.isRecording)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressableStyle())
         .disabled(disabled)
         .onHover { hovering = $0 }
         .keyboardShortcut("r", modifiers: .command)
@@ -201,7 +231,24 @@ struct RecordButton: View {
     }
 
     private var disabled: Bool { model.isBusy || (model.phase != .idle && !model.isRecording) }
-    private var glow: Color { model.isRecording ? Color(hex: 0xE5484D) : Color(hex: 0x0EA5E9) }
+
+    private var fill: Color {
+        let base = model.isRecording ? Theme.record : Theme.ink
+        return base.opacity(hovering && !disabled ? 0.9 : 1)
+    }
+
+    @ViewBuilder
+    private var indicator: some View {
+        if model.isBusy {
+            // The spinner draws for the opposite appearance so it shows on the ink fill.
+            ProgressView().controlSize(.small).environment(\.colorScheme, colorScheme == .dark ? .light : .dark)
+        } else if model.isRecording {
+            RoundedRectangle(cornerRadius: 2.5, style: .continuous).fill(Theme.onInk).frame(width: 11, height: 11)
+        } else {
+            Circle().fill(Theme.record).frame(width: 11, height: 11)
+                .overlay(Circle().strokeBorder(Theme.onInk.opacity(0.35), lineWidth: 1))
+        }
+    }
 
     private var label: String {
         switch model.phase {
@@ -217,6 +264,7 @@ struct RecordButton: View {
 /// Two-lane rolling waveform: Me rises above the centre line, Them falls below it.
 struct WaveRibbon: View {
     @ObservedObject var meter: MeterModel
+    var paused = false
 
     var body: some View {
         HStack(spacing: 10) {
@@ -225,7 +273,7 @@ struct WaveRibbon: View {
                 Spacer(minLength: 0)
                 Eyebrow(text: "Them", color: Theme.tone(1))
             }
-            .frame(width: 38, alignment: .leading)
+            .frame(width: 40, alignment: .leading)
 
             Canvas { context, size in
                 let step: CGFloat = 4
@@ -239,7 +287,7 @@ struct WaveRibbon: View {
                 let themColor = Theme.tone(1)
 
                 context.fill(
-                    Path(CGRect(x: 0, y: middle - 0.5, width: size.width, height: 1)), with: .color(Theme.hairline))
+                    Path(CGRect(x: 0, y: middle - 0.5, width: size.width, height: 1)), with: .color(Theme.stroke))
 
                 for index in 0..<count {
                     let x = size.width - CGFloat(index) * step - barWidth
@@ -255,12 +303,28 @@ struct WaveRibbon: View {
                         with: .color(themColor.opacity(fade)))
                 }
             }
+            .opacity(paused ? 0.25 : 1)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
-        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Theme.well))
+        .background(RoundedRectangle(cornerRadius: Radius.l, style: .continuous).fill(Theme.sunken))
+        .overlay(RoundedRectangle(cornerRadius: Radius.l, style: .continuous).strokeBorder(Theme.hairline))
+        .overlay {
+            if paused {
+                Label("Paused — off the record", systemImage: "pause.circle.fill")
+                    .labelStyle(TightLabelStyle())
+                    .font(TypeScale.calloutStrong)
+                    .foregroundStyle(Theme.ink)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(Capsule().fill(Theme.surface))
+                    .overlay(Capsule().strokeBorder(Theme.hairline))
+                    .transition(.opacity.combined(with: .scale(scale: 0.95)))
+            }
+        }
+        .animation(Motion.standard, value: paused)
         .accessibilityElement()
-        .accessibilityLabel("Live input levels for Me and Them")
+        .accessibilityLabel(paused ? "Paused, off the record" : "Live input levels for Me and Them")
     }
 
     private func value(_ history: [Float], _ indexFromNewest: Int) -> Float {
@@ -273,23 +337,26 @@ struct WarningsView: View {
     @EnvironmentObject private var model: AppModel
 
     var body: some View {
-        HStack(alignment: .top, spacing: 10) {
-            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(Theme.caution).font(.system(size: 13))
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(Theme.caution).font(.system(size: 12))
             VStack(alignment: .leading, spacing: 4) {
                 ForEach(Array(model.warnings.enumerated()), id: \.offset) { _, warning in
                     Text(warning)
-                        .font(.ui(12.5))
+                        .font(TypeScale.callout)
                         .foregroundStyle(Theme.ink)
                         .fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled)
                 }
             }
-            Spacer(minLength: 8)
-            Button("Dismiss") { model.warnings = [] }.buttonStyle(GhostButtonStyle())
+            Spacer(minLength: Space.s)
+            Button("Dismiss") { model.warnings = [] }.buttonStyle(.ghost(.small))
         }
-        .padding(.horizontal, 24)
+        .readableColumn()
         .padding(.vertical, 10)
-        .background(Theme.caution.opacity(0.12))
-        .overlay(alignment: .bottom) { Rectangle().fill(Theme.hairline).frame(height: 1) }
+        .background(Theme.caution.opacity(0.10))
+        .overlay(alignment: .bottom) { Hairline() }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Warning")
     }
 }
 
@@ -299,39 +366,70 @@ struct FooterView: View {
     @EnvironmentObject private var model: AppModel
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: Space.s) {
             Text(footerText)
-                .font(.ui(11.5))
+                .font(TypeScale.caption)
                 .foregroundStyle(Theme.inkFaint)
                 .lineLimit(1)
                 .truncationMode(.middle)
-            Spacer()
-            footerButtons.fixedSize().layoutPriority(1)
+                .help(footerText)
+            Spacer(minLength: Space.s)
+            // Labels fold into icons when the window is narrow.
+            ViewThatFits(in: .horizontal) {
+                footerButtons(iconOnly: false)
+                footerButtons(iconOnly: true)
+            }
+            .layoutPriority(1)
         }
-        .padding(.horizontal, 24)
-        .padding(.vertical, 10)
-        .overlay(alignment: .top) { Rectangle().fill(Theme.hairline).frame(height: 1) }
+        .readableColumn(gutter: Metrics.gutter - 6)
+        .padding(.vertical, 8)
+        .overlay(alignment: .top) { Hairline() }
     }
 
-    private var footerButtons: some View {
-        HStack(spacing: 8) {
+    private func footerButtons(iconOnly: Bool) -> some View {
+        HStack(spacing: 2) {
             switch model.screen {
             case .home:
-                SettingsLink { Label("Settings", systemImage: "slider.horizontal.3") }
-                    .buttonStyle(GhostButtonStyle())
-                Button { model.openCallsFolder() } label: { Label("Calls folder", systemImage: "folder") }
-                    .buttonStyle(GhostButtonStyle())
+                SettingsLink { FooterLabel("Settings", "gearshape", iconOnly) }
+                    .buttonStyle(.ghost(.small))
+                    .help("Settings (⌘,)")
+                Button { model.openCallsFolder() } label: { FooterLabel("Calls folder", "folder", iconOnly) }
+                    .buttonStyle(.ghost(.small))
+                    .help("Open the calls folder in Finder")
             case .live:
-                Button { model.revealInFinder() } label: { Label("Show in Finder", systemImage: "folder") }
-                    .buttonStyle(GhostButtonStyle())
+                Button { model.revealInFinder() } label: { FooterLabel("Show in Finder", "folder", iconOnly) }
+                    .buttonStyle(.ghost(.small))
             case .call:
-                Button { model.regenerateSummary() } label: { Label("Regenerate summary", systemImage: "arrow.clockwise") }
-                    .buttonStyle(GhostButtonStyle())
+                Button { model.regenerateSummary() } label: { FooterLabel("Regenerate summary", "arrow.clockwise", iconOnly) }
+                    .buttonStyle(.ghost(.small))
                     .disabled(model.phase != .idle || (model.document?.turns.isEmpty ?? true))
-                Button { model.revealInFinder() } label: { Label("Show in Finder", systemImage: "folder") }
-                    .buttonStyle(GhostButtonStyle())
+                    .help("Write the summary again from the transcript")
+                Button { model.revealInFinder() } label: { FooterLabel("Show in Finder", "folder", iconOnly) }
+                    .buttonStyle(.ghost(.small))
                 TrashButton()
             }
+        }
+        .fixedSize()
+    }
+}
+
+/// A footer button's label; just the symbol when space is short (VoiceOver still reads the title).
+private struct FooterLabel: View {
+    let title: String
+    let symbol: String
+    let iconOnly: Bool
+
+    init(_ title: String, _ symbol: String, _ iconOnly: Bool) {
+        self.title = title
+        self.symbol = symbol
+        self.iconOnly = iconOnly
+    }
+
+    var body: some View {
+        if iconOnly {
+            Label(title, systemImage: symbol).labelStyle(.iconOnly).frame(minWidth: 14)
+        } else {
+            Label(title, systemImage: symbol)
         }
     }
 }
@@ -356,78 +454,69 @@ struct HomeView: View {
             welcome
         } else {
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 10) {
+                VStack(alignment: .leading, spacing: Space.xl) {
                     OpenActionItemsSection()
-                    HStack(spacing: 12) {
-                        Eyebrow(text: "Recent calls").padding(.leading, 2)
-                        Spacer(minLength: 8)
-                        HomeSearchField(text: $model.search, navigator: model.home)
-                    }
-                    .padding(.bottom, 2)
-                    let calls = model.visibleLibrary
-                    RecentCallsList(navigator: model.home, calls: calls)
-                    if calls.isEmpty {
-                        Text("No calls mention “\(model.search.trimmingCharacters(in: .whitespaces))”.")
-                            .font(.reading(14))
-                            .foregroundStyle(Theme.inkSoft)
+                    VStack(alignment: .leading, spacing: Space.m) {
+                        SectionHeader(title: "Recent calls") {
+                            HomeSearchField(text: $model.search, navigator: model.home)
+                                .frame(maxWidth: 230)
+                        }
+                        let calls = model.visibleLibrary
+                        RecentCallsList(navigator: model.home, calls: calls)
+                        if calls.isEmpty {
+                            VStack(spacing: 6) {
+                                Text("No calls mention “\(model.search.trimmingCharacters(in: .whitespaces))”")
+                                    .font(TypeScale.bodyStrong)
+                                    .foregroundStyle(Theme.ink)
+                                Text("Search looks at titles, summaries, transcripts, notes and speaker names.")
+                                    .font(TypeScale.callout)
+                                    .foregroundStyle(Theme.inkSoft)
+                            }
+                            .multilineTextAlignment(.center)
                             .frame(maxWidth: .infinity)
-                            .padding(.top, 28)
+                            .padding(.top, Space.xl)
+                        }
                     }
                 }
-                .padding(.horizontal, 24)
-                .padding(.vertical, 20)
+                .readableColumn()
+                .padding(.top, 20)
+                .padding(.bottom, Space.xl)
                 .background(OverlayScrollers())
             }
         }
     }
 
+    @ViewBuilder
     private var welcome: some View {
-        VStack(spacing: 18) {
-            Spacer()
-            Glyph()
-            VStack(spacing: 6) {
-                if case .failed(let message) = model.phase {
-                    Text("Earshot could not start").font(.ui(19, .semibold)).foregroundStyle(Theme.ink)
-                    Text(message).font(.ui(13)).foregroundStyle(Theme.inkSoft).multilineTextAlignment(.center)
-                    Button("Try again") { Task { await model.loadModels() } }.buttonStyle(GhostButtonStyle()).padding(.top, 6)
-                } else {
-                    Text("Join your call, then press Record").font(.ui(19, .semibold)).foregroundStyle(Theme.ink)
-                    Text("Earshot writes down both sides as they speak and hands you a summary when you stop.")
-                        .font(.reading(14.5))
-                        .foregroundStyle(Theme.inkSoft)
-                        .multilineTextAlignment(.center)
-                        .lineSpacing(3)
+        if case .failed(let message) = model.phase {
+            EmptyState(title: "Earshot could not start", message: message) {
+                Image(systemName: "exclamationmark.triangle")
+                    .font(.system(size: 30, weight: .light))
+                    .foregroundStyle(Theme.caution)
+            } actions: {
+                Button("Try again") { Task { await model.loadModels() } }.buttonStyle(.secondary)
+            }
+        } else {
+            EmptyState(
+                title: "Join your call, then press Record",
+                message: "Earshot writes down both sides as they speak and hands you a summary when you stop."
+            ) {
+                Glyph().padding(.bottom, Space.xs)
+            } actions: {
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: Space.l) { hints }
+                    VStack(alignment: .leading, spacing: Space.s) { hints }
                 }
+                .padding(.top, Space.xs)
             }
-            HStack(spacing: 18) {
-                Hint(color: Theme.tone(0), title: "Me", text: "your microphone")
-                Hint(color: Theme.tone(1), title: "Them", text: "the Mac's audio")
-                Hint(color: Theme.inkFaint, title: "Private", text: "all on this Mac")
-            }
-            .padding(.top, 4)
-            Spacer()
-            Spacer()
         }
-        .frame(maxWidth: 400)
-        .padding(28)
     }
-}
 
-/// The two-lane waveform as a still mark.
-struct Glyph: View {
-    private let heights: [CGFloat] = [0.3, 0.55, 0.9, 0.65, 1.0, 0.45, 0.75, 0.35, 0.6, 0.25]
-
-    var body: some View {
-        HStack(alignment: .center, spacing: 5) {
-            ForEach(Array(heights.enumerated()), id: \.offset) { index, height in
-                VStack(spacing: 3) {
-                    Capsule().fill(Theme.tone(0)).frame(width: 5, height: 26 * height)
-                    Capsule().fill(Theme.tone(1)).frame(width: 5, height: 26 * heights[heights.count - 1 - index])
-                }
-                .frame(height: 62)
-            }
-        }
-        .accessibilityHidden(true)
+    @ViewBuilder
+    private var hints: some View {
+        Hint(color: Theme.tone(0), title: "Me", text: "your microphone")
+        Hint(color: Theme.tone(1), title: "Them", text: "the Mac's audio")
+        Hint(color: Theme.inkFaint, title: "Private", text: "all on this Mac")
     }
 }
 
@@ -438,14 +527,16 @@ struct Hint: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            Circle().fill(color).frame(width: 7, height: 7)
-            Text(title).font(.ui(12, .semibold)).foregroundStyle(Theme.ink)
-            Text(text).font(.ui(12)).foregroundStyle(Theme.inkSoft)
+            Dot(color: color)
+            Text(title).font(TypeScale.calloutStrong).foregroundStyle(Theme.ink)
+            Text(text).font(TypeScale.callout).foregroundStyle(Theme.inkSoft)
         }
         .fixedSize()
+        .accessibilityElement(children: .combine)
     }
 }
 
+/// One saved call in a day group: title and time, then the TL;DR.
 struct CallRow: View {
     let call: SavedCall
     let open: () -> Void
@@ -456,76 +547,99 @@ struct CallRow: View {
     var armed = false
     @State private var hovering = false
 
-    private static let formatter: DateFormatter = {
+    private static let time: DateFormatter = {
         let formatter = DateFormatter()
-        formatter.doesRelativeDateFormatting = true
-        formatter.dateStyle = .medium
+        formatter.dateStyle = .none
         formatter.timeStyle = .short
         return formatter
     }()
 
+    private static let dayAndTime: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.setLocalizedDateFormatFromTemplate("d MMM jj:mm")
+        return formatter
+    }()
+
+    /// The day header already says which day for the past week; older calls show the date too.
+    private var when: String {
+        let recent = Date().timeIntervalSince(call.date) < 6 * 24 * 3600
+        return (recent ? Self.time : Self.dayAndTime).string(from: call.date)
+    }
+
     var body: some View {
+        let shape = RoundedRectangle(cornerRadius: Radius.m, style: .continuous)
         Button(action: open) {
-            HStack(alignment: .top, spacing: 14) {
-                VStack(alignment: .leading, spacing: 5) {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(alignment: .firstTextBaseline, spacing: Space.m) {
                     Text(call.title)
-                        .font(.ui(15, .semibold))
+                        .font(TypeScale.headline)
                         .foregroundStyle(Theme.ink)
                         .lineLimit(1)
-                    if let overview = call.overview {
-                        Text(overview)
-                            .font(.reading(13.5))
-                            .foregroundStyle(Theme.inkSoft)
-                            .lineLimit(2)
-                            .lineSpacing(2)
-                            .multilineTextAlignment(.leading)
-                    }
-                    HStack(spacing: 6) {
-                        Text(Self.formatter.string(from: call.date))
-                        if let duration = call.duration {
-                            Text("·")
-                            Text(duration)
+                    Spacer(minLength: Space.s)
+                    if armed {
+                        Label("Move to Trash? ⌘⌫", systemImage: "trash")
+                            .labelStyle(TightLabelStyle(spacing: 4))
+                            .font(TypeScale.captionStrong)
+                            .foregroundStyle(Theme.record)
+                            .fixedSize()
+                    } else {
+                        HStack(spacing: 5) {
+                            Text(when)
+                            if let duration = call.duration {
+                                Text("·")
+                                Text(duration)
+                            }
                         }
-                    }
-                    .font(.stamp(10.5))
-                    .foregroundStyle(Theme.inkFaint)
-                }
-                Spacer(minLength: 8)
-                if armed {
-                    Label("Move to Trash? ⌘⌫", systemImage: "trash")
-                        .font(.ui(11.5, .semibold))
-                        .foregroundStyle(Theme.record)
+                        .font(TypeScale.stamp)
+                        .foregroundStyle(Theme.inkFaint)
                         .fixedSize()
+                    }
+                }
+                if let overview = call.overview {
+                    Text(inline(overview))
+                        .font(TypeScale.readingCompact)
+                        .foregroundStyle(Theme.inkSoft)
+                        .lineLimit(2)
+                        .lineSpacing(2)
+                        .multilineTextAlignment(.leading)
                 } else {
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(hovering || selected ? Theme.me : Theme.inkFaint)
-                        .padding(.top, 3)
+                    Text("No summary")
+                        .font(TypeScale.callout)
+                        .italic()
+                        .foregroundStyle(Theme.inkFaint)
                 }
             }
-            .padding(14)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 11)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(hovering || selected ? Theme.surfaceHover : Theme.surface)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .strokeBorder(
-                        armed ? Theme.record.opacity(0.7)
-                            : selected ? Theme.me.opacity(0.85) : hovering ? Theme.me.opacity(0.45) : Theme.hairline,
-                        lineWidth: selected || armed ? 1.5 : 1)
-            )
-            .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .background(shape.fill(fill))
+            .overlay(shape.strokeBorder(edge, lineWidth: 1.5))
+            .padding(4)
+            .contentShape(Rectangle())
+            .contentShape(.focusEffect, shape)
+            .animation(Motion.quick, value: hovering)
+            .animation(Motion.quick, value: selected)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressableStyle())
         .onHover { hovering = $0 }
+        .accessibilityHint(armed ? "Press Command-Delete again to move it to the Trash" : "Opens the call")
         .contextMenu {
             Button("Open") { open() }
             Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([call.folder]) }
             Divider()
             Button("Move to Trash", role: .destructive) { trash() }
         }
+    }
+
+    private var fill: Color {
+        if armed { return Theme.record.opacity(0.08) }
+        if selected { return Theme.washStrong }
+        return hovering ? Theme.wash : .clear
+    }
+
+    private var edge: Color {
+        if armed { return Theme.record.opacity(0.6) }
+        return selected ? Theme.focus : .clear
     }
 }
 
@@ -539,7 +653,7 @@ struct LiveView: View {
     var body: some View {
         VStack(spacing: 0) {
             transcript.frame(maxWidth: .infinity, maxHeight: .infinity)
-            if model.isRecording { NoteComposer() }
+            if model.isRecording { NoteComposer().transition(.opacity.combined(with: .move(edge: .bottom))) }
         }
     }
 
@@ -550,7 +664,7 @@ struct LiveView: View {
         } else {
             ScrollViewReader { proxy in
                 ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 10) {
+                    LazyVStack(alignment: .leading, spacing: 6) {
                         ForEach(TranscriptRow.merge(turns: model.liveTurns, markers: model.liveMarkers)) { row in
                             TranscriptRowView(row: row).transition(.opacity.combined(with: .move(edge: .bottom)))
                         }
@@ -565,9 +679,11 @@ struct LiveView: View {
                         }
                         Color.clear.frame(height: 1).id(bottom)
                     }
-                    .padding(.horizontal, 24)
-                    .padding(.vertical, 18)
-                    .animation(.snappy(duration: 0.25), value: model.liveTurns.count + model.liveMarkers.count)
+                    .readableColumn(gutter: Metrics.gutter - 8)
+                    .padding(.top, Space.l)
+                    // Room for the floating "Following" button under the newest line.
+                    .padding(.bottom, 52)
+                    .animation(Motion.standard, value: model.liveTurns.count + model.liveMarkers.count)
                     .background(OverlayScrollers())
                 }
                 .onChange(of: model.liveTurns) { _, _ in scroll(proxy) }
@@ -584,8 +700,8 @@ struct LiveView: View {
                             Label("Jump to live", systemImage: "arrow.down")
                         }
                     }
-                    .buttonStyle(GhostButtonStyle())
-                    .shadow(color: .black.opacity(0.16), radius: 8, y: 3)
+                    .buttonStyle(.secondary(.small))
+                    .shadow(color: .black.opacity(0.12), radius: 8, y: 3)
                     .help(follow ? "Click to stop following the live transcript" : "Scroll to the newest line and follow it")
                     .padding(14)
                 }
@@ -599,26 +715,43 @@ struct LiveView: View {
     }
 
     private var listening: some View {
-        VStack(spacing: 10) {
-            Text(model.paused ? "Paused" : "Listening…").font(.ui(19, .semibold)).foregroundStyle(Theme.ink)
-            Text(
-                model.paused
-                    ? "Off the record: nothing is transcribed or saved until you resume (⇧⌘P)."
-                    : model.heardSystemAudio
-                    ? "Words appear here about half a second after they are spoken."
-                    : "Nothing is playing on this Mac yet. If the other side is talking and the Them lane stays flat, allow Earshot under System Settings › Privacy & Security › Screen & System Audio Recording › System Audio Recording Only."
-            )
-            .font(.reading(14))
-            .foregroundStyle(Theme.inkSoft)
-            .multilineTextAlignment(.center)
-            .lineSpacing(3)
+        EmptyState(
+            title: model.paused ? "Paused" : "Listening…",
+            message: model.paused
+                ? "Off the record: nothing is transcribed or saved until you resume (⇧⌘P)."
+                : model.heardSystemAudio
+                ? "Words appear here about half a second after they are spoken."
+                : "Nothing is playing on this Mac yet. If the other side is talking and the Them lane stays flat, allow Earshot under System Settings › Privacy & Security › Screen & System Audio Recording › System Audio Recording Only."
+        ) {
+            if model.paused {
+                Image(systemName: "pause.circle").font(.system(size: 30, weight: .light)).foregroundStyle(Theme.inkFaint)
+            } else {
+                ListeningMark()
+            }
+        } actions: {
+            EmptyView()
         }
-        .frame(maxWidth: 400)
-        .padding(28)
     }
 }
 
-/// One speaker's stretch of talk: coloured rule, speaker tag, timestamp, serif text.
+/// Three dots that breathe while waiting for the first words.
+private struct ListeningMark: View {
+    @State private var on = false
+
+    var body: some View {
+        HStack(spacing: 6) {
+            ForEach(0..<3) { index in
+                Dot(color: index == 1 ? Theme.tone(1) : Theme.tone(0), size: 7)
+                    .opacity(on ? 1 : 0.25)
+                    .animation(.easeInOut(duration: 0.8).repeatForever().delay(Double(index) * 0.2), value: on)
+            }
+        }
+        .onAppear { on = true }
+        .accessibilityHidden(true)
+    }
+}
+
+/// One speaker's stretch of talk: a rule in the speaker's colour, name and time, serif text.
 struct TurnView: View {
     let turn: DisplayTurn
     var live = false
@@ -631,61 +764,65 @@ struct TurnView: View {
         let tone = Theme.tone(turn.tone)
         let playing = reading?.playing ?? false
         VStack(alignment: .leading, spacing: 5) {
-            HStack(spacing: 7) {
+            HStack(spacing: Space.s) {
                 if let rename = reading?.rename {
                     SpeakerTag(turn: turn, color: tone, editing: rename)
                 } else {
                     Eyebrow(text: turn.label, color: tone)
                 }
                 if live {
-                    Circle()
-                        .fill(tone)
-                        .frame(width: 5, height: 5)
-                        .opacity(pulse ? 0.25 : 1)
-                        .animation(.easeInOut(duration: 0.7).repeatForever(autoreverses: true), value: pulse)
-                        .onAppear { pulse = true }
-                }
-                Spacer(minLength: 8)
-                if let play = reading?.play {
+                    HStack(spacing: 4) {
+                        Dot(color: tone, size: 5)
+                            .opacity(pulse ? 0.25 : 1)
+                            .animation(.easeInOut(duration: 0.7).repeatForever(autoreverses: true), value: pulse)
+                            .onAppear { pulse = true }
+                        Text("live").font(TypeScale.stamp).foregroundStyle(Theme.inkFaint)
+                    }
+                } else if let play = reading?.play {
                     Button(action: play) {
                         HStack(spacing: 4) {
-                            Image(systemName: "play.fill").font(.system(size: 8, weight: .bold))
+                            Text(turn.time).font(TypeScale.stamp)
+                            Image(systemName: playing ? "speaker.wave.2.fill" : "play.fill")
+                                .font(.system(size: 7.5, weight: .bold))
                                 .opacity(hovering || playing ? 1 : 0)
-                            Text(turn.time).font(.stamp(10.5))
                         }
-                        .foregroundStyle(hovering || playing ? Theme.me : Theme.inkFaint)
+                        .foregroundStyle(hovering || playing ? Theme.ink : Theme.inkFaint)
                         .contentShape(Rectangle())
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(PressableStyle())
                     .help("Play from here")
+                    .accessibilityLabel("Play from \(turn.time)")
                 } else {
-                    Text(live ? "live" : turn.time).font(.stamp(10.5)).foregroundStyle(Theme.inkFaint)
+                    Text(turn.time).font(TypeScale.stamp).foregroundStyle(Theme.inkFaint)
                 }
+                Spacer(minLength: 0)
             }
             Text(reading?.text ?? AttributedString(turn.text))
-                .font(.reading(15.5))
-                .lineSpacing(4.5)
+                .font(TypeScale.reading)
+                .lineSpacing(TypeScale.readingLeading)
                 .foregroundStyle(live ? Theme.inkSoft : Theme.ink)
                 .fixedSize(horizontal: false, vertical: true)
                 .textSelection(.enabled)
         }
-        .padding(.leading, 16)
-        .padding(.trailing, 14)
-        .padding(.vertical, 11)
+        .padding(.leading, 18)
+        .padding(.trailing, 12)
+        .padding(.vertical, 10)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(live ? tone.opacity(0.08) : playing ? tone.opacity(0.06) : Theme.surface)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .strokeBorder(live ? tone.opacity(0.28) : playing ? tone.opacity(0.35) : Theme.hairline)
+            RoundedRectangle(cornerRadius: Radius.l - 2, style: .continuous).fill(background(tone, playing: playing))
         )
         .overlay(alignment: .leading) {
-            Capsule().fill(tone).frame(width: 3).padding(.vertical, 11).padding(.leading, 6)
+            Capsule().fill(tone.opacity(live ? 0.6 : 1)).frame(width: 2.5).padding(.vertical, 12).padding(.leading, 6)
         }
         .onHover { hovering = reading != nil && $0 }
-        .animation(.easeOut(duration: 0.2), value: playing)
+        .animation(Motion.quick, value: hovering)
+        .animation(Motion.standard, value: playing)
+    }
+
+    private func background(_ tone: Color, playing: Bool) -> Color {
+        if live { return tone.opacity(0.07) }
+        if playing { return tone.opacity(0.10) }
+        return hovering ? Theme.wash : .clear
     }
 }
 
@@ -697,24 +834,29 @@ struct CallView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            ZStack {
-                PillTabs(selection: $model.tab)
-                HStack {
-                    Spacer()
-                    ExportButton()
+            VStack(spacing: Space.s) {
+                ZStack {
+                    PillTabs(selection: $model.tab, options: AppModel.Tab.allCases.map { ($0, $0.rawValue) })
+                    HStack {
+                        Spacer()
+                        ExportButton()
+                    }
                 }
-                .padding(.horizontal, 24)
+                if reader.findOpen { FindBar().transition(.opacity.combined(with: .move(edge: .top))) }
             }
+            .readableColumn()
             .padding(.top, 14)
-            .padding(.bottom, 4)
-            if reader.findOpen { FindBar().transition(.opacity.combined(with: .move(edge: .top))) }
-            switch model.tab {
-            case .transcript: transcript
-            case .summary: SummaryView()
+            .padding(.bottom, 6)
+            Group {
+                switch model.tab {
+                case .transcript: transcript
+                case .summary: SummaryView()
+                }
             }
+            .frame(maxHeight: .infinity)
             if reader.hasAudio { PlayerBar(player: reader.player, follow: $reader.follow) }
         }
-        .animation(.snappy(duration: 0.2), value: reader.findOpen)
+        .animation(Motion.standard, value: reader.findOpen)
         // Closing the window leaves the call too.
         .onDisappear { reader.player.pause() }
     }
@@ -724,46 +866,11 @@ struct CallView: View {
         let turns = model.document?.turns ?? []
         let markers = model.document?.markers ?? []
         if turns.isEmpty && markers.isEmpty {
-            VStack(spacing: 8) {
-                Text("No speech was detected").font(.ui(17, .semibold)).foregroundStyle(Theme.ink)
-                Text("Check that the call's audio plays through this Mac and that the microphone is the one you expect.")
-                    .font(.reading(14)).foregroundStyle(Theme.inkSoft).multilineTextAlignment(.center)
-            }
-            .frame(maxWidth: 380, maxHeight: .infinity)
-            .padding(28)
+            EmptyState(
+                title: "No speech was detected",
+                message: "Check that the call's audio plays through this Mac and that the microphone is the one you expect.")
         } else {
             CallTranscript()
         }
-    }
-}
-
-/// Sliding two-way switch.
-struct PillTabs: View {
-    @Binding var selection: AppModel.Tab
-    @Namespace private var namespace
-
-    var body: some View {
-        HStack(spacing: 2) {
-            ForEach(AppModel.Tab.allCases, id: \.self) { tab in
-                Button {
-                    withAnimation(.snappy(duration: 0.22)) { selection = tab }
-                } label: {
-                    Text(tab.rawValue)
-                        .font(.ui(12.5, .semibold))
-                        .foregroundStyle(selection == tab ? Theme.background : Theme.inkSoft)
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 6)
-                        .background {
-                            if selection == tab {
-                                Capsule().fill(Theme.ink).matchedGeometryEffect(id: "pill", in: namespace)
-                            }
-                        }
-                        .contentShape(Capsule())
-                }
-                .buttonStyle(.plain)
-            }
-        }
-        .padding(3)
-        .background(Capsule().fill(Theme.well))
     }
 }

@@ -1,62 +1,26 @@
 import EarshotCore
 import SwiftUI
 
-/// A round-cornered checkbox in the app's style (stock toggles look out of place on the cards).
-struct ActionCheckbox: View {
-    let done: Bool
-    var tint: Color = Theme.tone(1)
-    let toggle: () -> Void
-    @Environment(\.isEnabled) private var isEnabled
-    @State private var hovering = false
-
-    var body: some View {
-        Button(action: toggle) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 4.5, style: .continuous)
-                    .fill(done ? tint : (hovering && isEnabled ? tint.opacity(0.12) : Theme.surface))
-                RoundedRectangle(cornerRadius: 4.5, style: .continuous)
-                    .strokeBorder(done ? tint : (hovering && isEnabled ? tint : Theme.inkFaint), lineWidth: 1.3)
-                if done {
-                    Image(systemName: "checkmark")
-                        .font(.system(size: 9, weight: .heavy))
-                        .foregroundStyle(Theme.surface)
-                        .transition(.scale(scale: 0.4).combined(with: .opacity))
-                }
-            }
-            .frame(width: 16, height: 16)
-            .padding(3)
-            .contentShape(Rectangle())
-            .opacity(isEnabled ? 1 : 0.5)
-            .animation(.snappy(duration: 0.16), value: done)
-        }
-        .buttonStyle(.plain)
-        .onHover { hovering = $0 }
-        .help(done ? "Mark as not done" : "Mark as done")
-        .accessibilityLabel(done ? "Done" : "Not done")
-        .accessibilityAddTraits(done ? [.isSelected] : [])
-        // Sit on the text's first baseline, like a list marker.
-        .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4.5 }
-    }
-}
-
-/// The owner of an action item. Items that are yours ("Me") get a solid chip so they stand out.
+/// The owner of an action item. Yours (owned by "Me", or by the name "Me" was given in that
+/// call) is a filled chip so it stands out; a speaker of the call gets that speaker's colour.
 struct OwnerChip: View {
     let owner: String
-    var accent: Color = Theme.tone(1)
+    /// The call's speaker names (label → name), from transcript.md.
+    var names: [String: String] = [:]
     var compact = false
 
     var body: some View {
-        let mine = owner.lowercased() == "me"
-        let unassigned = owner.lowercased() == "unassigned"
-        let color = unassigned ? Theme.inkFaint : (mine ? Theme.me : accent)
-        Text(owner)
-            .font(.ui(compact ? 10.5 : 11, .bold))
-            .foregroundStyle(mine ? Theme.surface : (unassigned ? Theme.inkSoft : accent))
-            .padding(.horizontal, compact ? 7 : 8)
-            .padding(.vertical, compact ? 2 : 2.5)
-            .background(Capsule().fill(mine ? color : color.opacity(0.14)))
-            .fixedSize()
+        let label = SpeakerNames.label(of: owner, names: names)
+        let mine = label == "Me"
+        Chip(text: owner, style: style(label: label, mine: mine), compact: compact)
             .help(mine ? "Yours to do" : "Owner: \(owner)")
+            .accessibilityLabel(mine ? "Yours: \(owner)" : "Owner: \(owner)")
+    }
+
+    private func style(label: String?, mine: Bool) -> Chip.Style {
+        if mine { return .solid(Theme.me) }
+        if let label { return .soft(Theme.tone(Theme.tone(label: label))) }
+        return .neutral
     }
 }
 
@@ -92,82 +56,86 @@ struct OpenActionItemsSection: View {
     var body: some View {
         let entries = entries
         let open = entries.filter { !$0.item.done }.count
+        let mine = entries.filter { !$0.item.done && $0.item.isMine(names: $0.call.speakerNames) }.count
         if model.search.trimmingCharacters(in: .whitespaces).isEmpty, !entries.isEmpty {
-            VStack(alignment: .leading, spacing: 8) {
-                header(open: open)
+            VStack(alignment: .leading, spacing: Space.s) {
+                header(open: open, mine: mine)
                 if !collapsed {
                     let shown = showAll ? entries : Array(entries.prefix(Self.preview))
-                    VStack(alignment: .leading, spacing: 0) {
-                        ForEach(Array(shown.enumerated()), id: \.element.id) { index, entry in
-                            if index > 0 { Rectangle().fill(Theme.hairline).frame(height: 1).padding(.leading, 34) }
-                            row(entry)
-                        }
-                        if entries.count > Self.preview {
-                            Button {
-                                withAnimation(.snappy(duration: 0.22)) { showAll.toggle() }
-                            } label: {
-                                Text(showAll ? "Show fewer" : "Show \(entries.count - Self.preview) more")
-                                    .font(.ui(11.5, .semibold))
-                                    .foregroundStyle(Theme.me)
-                                    .padding(.vertical, 8)
-                                    .padding(.leading, 34)
-                                    .contentShape(Rectangle())
+                    Card(padding: 0) {
+                        VStack(alignment: .leading, spacing: 0) {
+                            ForEach(Array(shown.enumerated()), id: \.element.id) { index, entry in
+                                if index > 0 { Hairline().padding(.leading, 42).padding(.trailing, 16) }
+                                row(entry)
                             }
-                            .buttonStyle(.plain)
+                            if entries.count > Self.preview {
+                                Hairline().padding(.horizontal, 16)
+                                Button {
+                                    withAnimation(Motion.standard) { showAll.toggle() }
+                                } label: {
+                                    Label(
+                                        showAll ? "Show fewer" : "Show \(entries.count - Self.preview) more",
+                                        systemImage: showAll ? "chevron.up" : "chevron.down")
+                                }
+                                .buttonStyle(.ghost(.small))
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 6)
+                            }
                         }
                     }
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 4)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Theme.surface))
-                    .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Theme.hairline))
                     .transition(.opacity.combined(with: .move(edge: .top)))
                 }
             }
-            .padding(.bottom, 10)
-            .animation(.snappy(duration: 0.22), value: entries.map(\.id))
+            .animation(Motion.standard, value: entries.map(\.id))
         }
     }
 
-    private func header(open: Int) -> some View {
+    private func header(open: Int, mine: Int) -> some View {
         Button {
-            withAnimation(.snappy(duration: 0.22)) { collapsed.toggle() }
+            withAnimation(Motion.standard) { collapsed.toggle() }
         } label: {
-            HStack(spacing: 7) {
-                Image(systemName: "checklist").font(.system(size: 11, weight: .semibold)).foregroundStyle(Theme.tone(1))
-                Eyebrow(text: "Open action items")
-                Text("\(open)").font(.stamp(10.5)).foregroundStyle(Theme.inkFaint)
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 9, weight: .bold))
-                    .foregroundStyle(Theme.inkFaint)
-                    .rotationEffect(.degrees(collapsed ? -90 : 0))
-                Spacer()
+            SectionHeader(title: "Open action items", symbol: "checklist", count: "\(open)") {
+                HStack(spacing: Space.s) {
+                    if mine > 0 { Chip(text: "\(mine) yours", style: .soft(Theme.me), compact: true) }
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(Theme.inkFaint)
+                        .rotationEffect(.degrees(collapsed ? -90 : 0))
+                }
             }
-            .padding(.leading, 2)
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressableStyle())
         .help(collapsed ? "Show open action items" : "Hide open action items")
+        .accessibilityValue(collapsed ? "Collapsed" : "Expanded")
     }
 
     private func row(_ entry: Entry) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
-            ActionCheckbox(done: entry.item.done) { toggle(entry) }
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Checkbox(done: entry.item.done) { toggle(entry) }
                 .disabled(!model.canEditActionItems)
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(alignment: .firstTextBaseline, spacing: 7) {
-                    if let owner = entry.item.owner { OwnerChip(owner: owner, compact: true) }
-                    Text(markdownInline(entry.item.task))
-                        .font(.reading(14))
-                        .foregroundStyle(entry.item.done ? Theme.inkFaint : Theme.ink)
-                        .strikethrough(entry.item.done, color: Theme.inkFaint)
-                        .lineLimit(2)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+            VStack(alignment: .leading, spacing: 5) {
+                Text(inline(entry.item.task))
+                    .font(TypeScale.readingCompact)
+                    .foregroundStyle(entry.item.done ? Theme.inkFaint : Theme.ink)
+                    .strikethrough(entry.item.done, color: Theme.inkFaint)
+                    .lineLimit(2)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                HStack(spacing: 6) {
+                    if let owner = entry.item.owner {
+                        OwnerChip(owner: owner, names: entry.call.speakerNames, compact: true)
+                    }
+                    LinkButton(
+                        title: entry.call.title, trailingSymbol: "arrow.up.right", font: TypeScale.caption,
+                        color: Theme.inkFaint
+                    ) { model.open(entry.call) }
+                    .help("Open “\(entry.call.title)”")
                 }
-                CallLink(title: entry.call.title) { model.open(entry.call) }
             }
         }
-        .padding(.vertical, 6)
+        .padding(.leading, 12)
+        .padding(.trailing, 16)
+        .padding(.vertical, 10)
     }
 
     private func toggle(_ entry: Entry) {
@@ -179,34 +147,7 @@ struct OpenActionItemsSection: View {
         }
         lingering.insert(entry.id)
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) {
-            withAnimation(.snappy(duration: 0.25)) { _ = lingering.remove(entry.id) }
+            withAnimation(Motion.standard) { _ = lingering.remove(entry.id) }
         }
     }
-}
-
-/// The call an action item came from, as a small link.
-private struct CallLink: View {
-    let title: String
-    let open: () -> Void
-    @State private var hovering = false
-
-    var body: some View {
-        Button(action: open) {
-            HStack(spacing: 3) {
-                Text(title).lineLimit(1)
-                Image(systemName: "arrow.up.right").font(.system(size: 8, weight: .bold))
-            }
-            .font(.ui(11.5, .medium))
-            .foregroundStyle(hovering ? Theme.me : Theme.inkSoft)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .onHover { hovering = $0 }
-        .help("Open “\(title)”")
-    }
-}
-
-private func markdownInline(_ text: String) -> AttributedString {
-    (try? AttributedString(markdown: text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
-        ?? AttributedString(text)
 }

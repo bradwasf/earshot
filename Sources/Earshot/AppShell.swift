@@ -341,7 +341,7 @@ final class HomeNavigator: ObservableObject {
 
 // MARK: - Home list
 
-/// Recent calls under day headers, with the keyboard selection.
+/// Recent calls under day headers, each day one card, with the keyboard selection.
 struct RecentCallsList: View {
     @EnvironmentObject private var model: AppModel
     @ObservedObject var navigator: HomeNavigator
@@ -351,28 +351,34 @@ struct RecentCallsList: View {
         let groups = CallGrouping.byDay(calls)
         // Not lazy, so that ↑/↓ can scroll to any row.
         ScrollViewReader { proxy in
-            VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: Space.l) {
                 ForEach(groups) { group in
-                    HStack(spacing: 7) {
-                        Eyebrow(text: group.title, color: Theme.inkSoft)
-                        Text("\(group.calls.count)").font(.stamp(10)).foregroundStyle(Theme.inkFaint)
-                    }
-                    .padding(.leading, 2)
-                    .padding(.top, group.id == groups.first?.id ? 0 : 10)
-                    .accessibilityElement(children: .combine)
-                    .accessibilityAddTraits(.isHeader)
-                    ForEach(group.calls) { call in
-                        CallRow(
-                            call: call, open: { navigator.open(call) }, trash: { model.trash(call.folder) },
-                            selected: navigator.selection == call.folder, armed: navigator.armed == call.folder
-                        )
-                        .id(call.folder)
+                    VStack(alignment: .leading, spacing: Space.s) {
+                        HStack(spacing: 7) {
+                            Text(group.title).font(TypeScale.calloutStrong).foregroundStyle(Theme.ink)
+                            Text("\(group.calls.count)").font(TypeScale.stamp).foregroundStyle(Theme.inkFaint)
+                        }
+                        .padding(.leading, 4)
+                        .accessibilityElement(children: .combine)
+                        .accessibilityAddTraits(.isHeader)
+                        Card(padding: 0) {
+                            VStack(spacing: 0) {
+                                ForEach(Array(group.calls.enumerated()), id: \.element.id) { index, call in
+                                    if index > 0 { Hairline().padding(.horizontal, 16) }
+                                    CallRow(
+                                        call: call, open: { navigator.open(call) }, trash: { model.trash(call.folder) },
+                                        selected: navigator.selection == call.folder, armed: navigator.armed == call.folder
+                                    )
+                                    .id(call.folder)
+                                }
+                            }
+                        }
                     }
                 }
             }
             .onChange(of: navigator.selection) { _, folder in
                 guard let folder else { return }
-                withAnimation(.snappy(duration: 0.2)) { proxy.scrollTo(folder) }
+                withAnimation(Motion.standard) { proxy.scrollTo(folder) }
             }
             .task {
                 // Back from a call: bring the call that was open into view once the list is laid out.
@@ -397,8 +403,7 @@ struct HomeSearchField: View {
     @FocusState private var focused: Bool
 
     var body: some View {
-        SearchField(text: $text)
-            .focused($focused)
+        SearchField(text: $text, prompt: "Search calls", focus: $focused)
             .onChange(of: focused) { _, focused in navigator.searchFocused = focused }
             .onChange(of: navigator.searchFocusRequest) { _, _ in focused = true }
             .help("Search calls (⌘F)")
@@ -469,15 +474,21 @@ struct CallEndSetting: View {
     @AppStorage(Preference.detectCalls) private var detectCalls = true
 
     var body: some View {
-        Picker("When a recorded call ends", selection: $action) {
+        Picker(selection: $action) {
             ForEach(CallEndAction.allCases) { Text($0.label).tag($0.rawValue) }
+        } label: {
+            Text("When a recorded call ends")
+            Text(note)
         }
         .disabled(!detectCalls)
-        if action == CallEndAction.stop.rawValue && detectCalls {
-            Text(
-                "Earshot shows “Stopping in 5 s” first, so a dropped connection does not end the recording. “Keep recording” cancels it."
-            )
-            .font(.caption).foregroundStyle(.secondary)
+    }
+
+    private var note: String {
+        switch CallEndAction(rawValue: action) ?? .ask {
+        case .ask: return "A card offers “Stop & summarize”; ignoring it keeps recording."
+        case .stop:
+            return "A card counts down “Stopping in 5 s” first, so a dropped connection does not end the recording. “Keep recording” cancels it."
+        case .keep: return "Nothing happens; stop the recording yourself."
         }
     }
 }
@@ -491,19 +502,24 @@ struct AppShellSettings: View {
     @State private var notificationsDenied = false
 
     var body: some View {
-        Section("Shortcut and notifications") {
-            Toggle("Start and stop recording with \(GlobalHotKey.display) from any app", isOn: $globalShortcut)
-                .onChange(of: globalShortcut) { _, _ in model.updateGlobalShortcut() }
-            Text(shortcutNote)
-                .font(.caption)
-                .foregroundStyle(hotKey.state == .unavailable ? AnyShapeStyle(Theme.record) : AnyShapeStyle(.secondary))
-            Toggle("Notify me when a summary is ready", isOn: $notifySummaries)
-            Text(
-                notificationsDenied && notifySummaries
-                    ? "Notifications are turned off for Earshot in System Settings › Notifications."
-                    : "Only while the Earshot window is not in front. Click the notification to open the call."
-            )
-            .font(.caption).foregroundStyle(.secondary)
+        Section {
+            Toggle(isOn: $globalShortcut) {
+                Text("Start and stop recording with \(GlobalHotKey.display)")
+                Text(shortcutNote)
+                    .foregroundStyle(hotKey.state == .unavailable ? AnyShapeStyle(Theme.record) : AnyShapeStyle(.secondary))
+            }
+            .onChange(of: globalShortcut) { _, _ in model.updateGlobalShortcut() }
+            Toggle(isOn: $notifySummaries) {
+                Text("Notify me when a summary is ready")
+                Text(
+                    notificationsDenied && notifySummaries
+                        ? "Notifications are turned off for Earshot in System Settings › Notifications."
+                        : "Only while the Earshot window is not in front. Click the notification to open the call."
+                )
+                .foregroundStyle(notificationsDenied && notifySummaries ? AnyShapeStyle(Theme.caution) : AnyShapeStyle(.secondary))
+            }
+        } header: {
+            SettingsHeader("Shortcut and notifications", symbol: "command")
         }
         .task { notificationsDenied = await model.notifier.isDenied() }
     }
@@ -511,7 +527,7 @@ struct AppShellSettings: View {
     private var shortcutNote: String {
         switch hotKey.state {
         case .registered:
-            return "Works while you are in your meeting app. A small card confirms without taking focus from the call."
+            return "Works from any app, including your meeting. A small card confirms without taking focus from the call."
         case .unavailable:
             return "Another app already uses \(GlobalHotKey.display), so Earshot could not claim it. Quit that app or change its shortcut, then turn this off and on again."
         case .off:

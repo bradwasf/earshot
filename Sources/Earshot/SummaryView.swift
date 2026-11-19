@@ -89,7 +89,7 @@ struct SummaryView: View {
         if let markdown = model.document?.summary {
             ScrollViewReader { proxy in
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 12) {
+                    VStack(alignment: .leading, spacing: Space.m) {
                         if let document = SummaryDocument(markdown: markdown) {
                             if !document.overview.isEmpty { overview(document.overview) }
                             ForEach(document.sections) { section in
@@ -97,63 +97,61 @@ struct SummaryView: View {
                             }
                             if let footnote = document.footnote {
                                 Text(inline(footnote))
-                                    .font(.ui(11))
+                                    .font(TypeScale.caption)
                                     .foregroundStyle(Theme.inkFaint)
-                                    .padding(.horizontal, 4)
-                                    .padding(.top, 2)
+                                    .tint(Theme.inkSoft)
+                                    .padding(.horizontal, Space.xs)
+                                    .padding(.top, Space.xs)
                             }
                         } else {
                             Card {
                                 Text(reader.highlight(inline(Self.plain(markdown)), block: "summary-plain"))
-                                    .font(.reading(14.5))
+                                    .font(TypeScale.readingSmall)
                                     .foregroundStyle(Theme.inkSoft)
                                     .lineSpacing(3)
                                     .fixedSize(horizontal: false, vertical: true)
                             }
                         }
                     }
-                    .padding(.horizontal, 24)
-                    .padding(.vertical, 14)
+                    .readableColumn()
+                    .padding(.top, Space.s)
+                    .padding(.bottom, Space.xl)
                     .textSelection(.enabled)
                     .background(OverlayScrollers())
                 }
                 .onChange(of: reader.scrollRequest) { _, request in
                     guard let request, request.block.hasPrefix("summary-") else { return }
-                    withAnimation(.snappy(duration: 0.25)) { proxy.scrollTo(request.block, anchor: .center) }
+                    withAnimation(Motion.standard) { proxy.scrollTo(request.block, anchor: .center) }
                 }
+            }
+        } else if case .finishing(let message) = model.phase {
+            EmptyState(title: message, message: "The transcript is already saved. You can read it while this finishes.") {
+                ProgressView().controlSize(.small)
+            } actions: {
+                EmptyView()
             }
         } else {
-            VStack(spacing: 10) {
-                if case .finishing(let message) = model.phase {
-                    ProgressView().controlSize(.small)
-                    Text(message).font(.ui(13.5, .medium)).foregroundStyle(Theme.inkSoft)
-                    Text("The transcript is already saved. You can read it while this finishes.")
-                        .font(.reading(13.5)).foregroundStyle(Theme.inkFaint)
-                } else {
-                    Text("No summary yet").font(.ui(17, .semibold)).foregroundStyle(Theme.ink)
-                    Text("Use Regenerate summary below to write one from the transcript.")
-                        .font(.reading(14)).foregroundStyle(Theme.inkSoft)
-                }
+            EmptyState(title: "No summary yet", message: "Earshot can write one from the transcript with your local model.") {
+                Image(systemName: "text.badge.star").font(.system(size: 28, weight: .light)).foregroundStyle(Theme.inkFaint)
+            } actions: {
+                Button { model.regenerateSummary() } label: { Label("Regenerate summary", systemImage: "arrow.clockwise") }
+                    .buttonStyle(.secondary)
+                    .disabled(model.phase != .idle || (model.document?.turns.isEmpty ?? true))
             }
-            .multilineTextAlignment(.center)
-            .frame(maxWidth: 380, maxHeight: .infinity)
-            .padding(28)
         }
     }
 
     private func overview(_ text: String) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Eyebrow(text: "In short", color: Theme.me)
-            Text(reader.highlight(inline(text), block: "summary-overview"))
-                .font(.reading(16))
-                .lineSpacing(4.5)
-                .foregroundStyle(Theme.ink)
-                .fixedSize(horizontal: false, vertical: true)
+        Card(style: .wash, padding: 18) {
+            VStack(alignment: .leading, spacing: Space.s) {
+                Eyebrow(text: "In short", color: Theme.inkSoft)
+                Text(reader.highlight(inline(text), block: "summary-overview"))
+                    .font(TypeScale.readingLede)
+                    .lineSpacing(TypeScale.readingLeading)
+                    .foregroundStyle(Theme.ink)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
-        .padding(16)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Theme.me.opacity(0.10)))
-        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Theme.me.opacity(0.25)))
         .id("summary-overview")
     }
 
@@ -164,12 +162,7 @@ struct SummaryView: View {
     }
 }
 
-func inline(_ text: String) -> AttributedString {
-    (try? AttributedString(markdown: text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
-        ?? AttributedString(text)
-}
-
-/// One list section of the summary, styled by what it holds.
+/// One list section of the summary, marked by what it holds.
 private struct SectionCard: View {
     let section: SummaryDocument.Section
     @EnvironmentObject private var reader: CallReader
@@ -187,20 +180,11 @@ private struct SectionCard: View {
         return .other
     }
 
-    private var accent: Color {
-        switch kind {
-        case .actions: return Theme.tone(1)
-        case .decisions: return Theme.tone(3)
-        case .questions: return Theme.tone(2)
-        case .points, .other: return Theme.inkSoft
-        }
-    }
-
     private var symbol: String {
         switch kind {
         case .actions: return "checklist"
-        case .decisions: return "checkmark.seal.fill"
-        case .questions: return "questionmark.circle.fill"
+        case .decisions: return "checkmark.seal"
+        case .questions: return "questionmark.circle"
         case .points, .other: return "text.alignleft"
         }
     }
@@ -221,33 +205,29 @@ private struct SectionCard: View {
     }
 
     var body: some View {
-        Card(padding: 16) {
-            VStack(alignment: .leading, spacing: 11) {
-                HStack(spacing: 7) {
-                    Image(systemName: symbol).font(.system(size: 11, weight: .semibold)).foregroundStyle(accent)
-                    Eyebrow(text: section.name, color: accent)
-                    Spacer()
-                    if !isEmpty && kind != .other {
-                        Text(count).font(.stamp(10.5)).foregroundStyle(Theme.inkFaint)
-                    }
-                }
+        Card(padding: 18) {
+            VStack(alignment: .leading, spacing: Space.m) {
+                SectionHeader(
+                    title: section.name, symbol: symbol, count: !isEmpty && kind != .other ? count : nil,
+                    tint: Theme.inkSoft)
                 if isEmpty {
-                    Text("None recorded").font(.reading(14)).foregroundStyle(Theme.inkFaint)
+                    Text("None recorded").font(TypeScale.readingSmall).italic().foregroundStyle(Theme.inkFaint)
                 } else {
                     ForEach(Array(section.prose.enumerated()), id: \.offset) { index, line in
                         Text(reader.highlight(inline(line), block: section.blockID("p", index)))
-                            .font(.reading(14.5)).foregroundStyle(Theme.ink).lineSpacing(3)
+                            .font(TypeScale.readingSmall).foregroundStyle(Theme.ink).lineSpacing(3.5)
+                            .fixedSize(horizontal: false, vertical: true)
                             .id(section.blockID("p", index))
                     }
                     ForEach(Array(section.items.enumerated()), id: \.offset) { index, item in
                         if kind == .actions {
-                            ActionRow(item: actionItem(index), accent: accent, block: section.blockID("i", index))
+                            ActionRow(item: actionItem(index), block: section.blockID("i", index))
                                 .id(section.blockID("i", index))
                         } else {
-                            HStack(alignment: .firstTextBaseline, spacing: 10) {
-                                Circle().fill(accent.opacity(0.75)).frame(width: 5, height: 5).offset(y: -2.5)
+                            HStack(alignment: .firstTextBaseline, spacing: 11) {
+                                bullet
                                 Text(reader.highlight(inline(item), block: section.blockID("i", index)))
-                                    .font(.reading(14.5))
+                                    .font(TypeScale.readingSmall)
                                     .lineSpacing(3.5)
                                     .foregroundStyle(Theme.ink)
                                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -260,34 +240,45 @@ private struct SectionCard: View {
             }
         }
     }
+
+    @ViewBuilder
+    private var bullet: some View {
+        switch kind {
+        case .questions:
+            Text("?").font(.system(size: 12, weight: .bold, design: .serif)).foregroundStyle(Theme.inkFaint).frame(width: 8)
+        case .decisions:
+            Image(systemName: "arrow.right").font(.system(size: 9, weight: .bold)).foregroundStyle(Theme.inkFaint).frame(width: 8)
+        default:
+            Dot(color: Theme.inkFaint, size: 5).offset(y: -2.5).frame(width: 8)
+        }
+    }
 }
 
 /// "- [ ] **Owner** — task" as a checkbox, an owner chip and the task. Ticking writes summary.md.
 private struct ActionRow: View {
     @EnvironmentObject private var model: AppModel
-    let item: ActionItem
-    let accent: Color
-    var block = ""
     @EnvironmentObject private var reader: CallReader
+    let item: ActionItem
+    var block = ""
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
-            ActionCheckbox(done: item.done, tint: accent) {
+        HStack(alignment: .firstTextBaseline, spacing: 9) {
+            Checkbox(done: item.done) {
                 guard let folder = model.document?.folder else { return }
                 model.setActionItem(item, in: folder, done: !item.done)
             }
             .disabled(!model.canEditActionItems || item.line < 0)
-            HStack(alignment: .firstTextBaseline, spacing: 10) {
-                if let owner = item.owner { OwnerChip(owner: owner, accent: accent) }
+            HStack(alignment: .firstTextBaseline, spacing: Space.s) {
+                if let owner = item.owner { OwnerChip(owner: owner, names: model.document?.speakerNames ?? [:]) }
                 Text(reader.highlight(inline(item.task), block: block))
-                    .font(.reading(14.5))
+                    .font(TypeScale.readingSmall)
                     .lineSpacing(3.5)
                     .foregroundStyle(item.done ? Theme.inkFaint : Theme.ink)
                     .strikethrough(item.done, color: Theme.inkFaint)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            .opacity(item.done ? 0.85 : 1)
+            .opacity(item.done ? 0.8 : 1)
         }
     }
 }

@@ -14,13 +14,15 @@ struct CallTranscript: View {
         let canPlay = reader.hasAudio
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 10) {
+                LazyVStack(alignment: .leading, spacing: 6) {
                     if let talk = model.document?.talk, !talk.isEmpty {
-                        TalkTimeStrip(shares: talk, duration: model.document?.durationText).padding(.bottom, 4)
+                        TalkTimeStrip(shares: talk, duration: model.document?.durationText)
+                            .padding(.horizontal, 8)
+                            .padding(.bottom, Space.s)
                     }
                     if turns.isEmpty {
                         Text("No speech was detected; only your notes were saved.")
-                            .font(.ui(12.5)).foregroundStyle(Theme.inkSoft).padding(.bottom, 4)
+                            .font(TypeScale.callout).foregroundStyle(Theme.inkSoft).padding(.horizontal, 8).padding(.bottom, 4)
                     }
                     ForEach(TranscriptRow.merge(turns: turns, markers: model.document?.markers ?? [])) { row in
                         switch row {
@@ -40,13 +42,14 @@ struct CallTranscript: View {
                         }
                     }
                 }
-                .padding(.horizontal, 24)
-                .padding(.vertical, 14)
+                .readableColumn(gutter: Metrics.gutter - 8)
+                .padding(.top, Space.s)
+                .padding(.bottom, Space.xl)
                 .background(OverlayScrollers())
             }
             .onChange(of: reader.scrollRequest) { _, request in
                 guard let request, turns.contains(where: { $0.id == request.block }) else { return }
-                withAnimation(.snappy(duration: 0.25)) { proxy.scrollTo(request.block, anchor: .center) }
+                withAnimation(Motion.standard) { proxy.scrollTo(request.block, anchor: .center) }
             }
         }
     }
@@ -100,18 +103,19 @@ struct SpeakerTag: View {
 
     var body: some View {
         Button { editing = true } label: {
-            HStack(spacing: 4) {
-                Eyebrow(text: turn.label, color: color)
-                Image(systemName: "pencil")
-                    .font(.system(size: 9, weight: .bold))
-                    .foregroundStyle(color.opacity(0.8))
-                    .opacity(hovering ? 1 : 0)
-            }
+            Eyebrow(text: turn.label, color: color)
+                .underline(hovering, color: color.opacity(0.5))
+            .padding(.horizontal, 5)
+            .padding(.vertical, 2)
+            .background(Capsule().fill(hovering ? color.opacity(0.12) : .clear))
+            .padding(.horizontal, -5)
             .contentShape(Rectangle())
+            .animation(Motion.quick, value: hovering)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressableStyle())
         .onHover { hovering = $0 }
         .help("Name this speaker")
+        .accessibilityLabel("\(turn.label), name this speaker")
         .popover(isPresented: $editing, arrowEdge: .bottom) {
             SpeakerNameEditor(turn: turn, color: color) { editing = false }
         }
@@ -133,18 +137,18 @@ struct SpeakerNameEditor: View {
     private var turnCount: Int { model.document?.turns.filter { $0.originalLabel == original }.count ?? 0 }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: Space.m) {
             HStack(spacing: 6) {
-                Circle().fill(color).frame(width: 7, height: 7)
+                Dot(color: color)
                 Eyebrow(text: original == "Me" ? "Name yourself" : "Name \(original)", color: color)
             }
             TextField(original == "Me" ? "Your name" : "Their name", text: $draft)
                 .textFieldStyle(.plain)
-                .font(.ui(15, .semibold))
+                .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(Theme.ink)
                 .padding(.horizontal, 10)
-                .padding(.vertical, 7)
-                .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Theme.well))
+                .frame(height: 32)
+                .fieldChrome(focused: focused, capsule: false)
                 .focused($focused)
                 .onSubmit(save)
                 .onChange(of: draft) { _, _ in error = nil }
@@ -152,22 +156,22 @@ struct SpeakerNameEditor: View {
                 error
                     ?? "Shown on all \(turnCount) turn\(turnCount == 1 ? "" : "s") and written into transcript.md and summary.md."
             )
-            .font(.ui(11.5))
+            .font(TypeScale.caption)
             .foregroundStyle(error == nil ? Theme.inkSoft : Theme.record)
             .fixedSize(horizontal: false, vertical: true)
-            HStack(spacing: 8) {
+            HStack(spacing: 6) {
                 if isNamed {
-                    Button("Use “\(original)”") { commit(nil) }.buttonStyle(GhostButtonStyle())
+                    Button("Use “\(original)”") { commit(nil) }.buttonStyle(.ghost(.small))
                 }
                 Spacer(minLength: 0)
-                Button("Cancel", action: close).buttonStyle(GhostButtonStyle())
+                Button("Cancel", action: close).buttonStyle(.secondary(.small))
                 Button("Save", action: save)
-                    .buttonStyle(GhostButtonStyle())
+                    .buttonStyle(.primary(.small))
                     .keyboardShortcut(.defaultAction)
             }
         }
-        .padding(14)
-        .frame(width: 280)
+        .padding(Space.l)
+        .frame(width: 290)
         .background(Theme.surface)
         .presentationBackground(Theme.surface)
         .onAppear {
@@ -196,63 +200,40 @@ struct FindBar: View {
     @FocusState private var focused: Bool
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: Space.s) {
             Image(systemName: "magnifyingglass").font(.system(size: 11, weight: .semibold)).foregroundStyle(Theme.inkFaint)
-            TextField(model.tab == .summary ? "Find in summary" : "Find in transcript", text: $reader.query)
-                .textFieldStyle(.plain)
-                .font(.ui(13))
-                .foregroundStyle(Theme.ink)
-                .focused($focused)
-                .onKeyPress(.return, phases: .down) { press in
-                    press.modifiers.contains(.shift) ? reader.previous() : reader.next()
-                    return .handled
-                }
-                .onExitCommand { reader.closeFind() }
+            TextField(
+                model.tab == .summary ? "Find in summary" : "Find in transcript", text: $reader.query,
+                prompt: Text(model.tab == .summary ? "Find in summary" : "Find in transcript").foregroundColor(Theme.inkFaint)
+            )
+            .textFieldStyle(.plain)
+            .font(TypeScale.body)
+            .foregroundStyle(Theme.ink)
+            .focused($focused)
+            .onKeyPress(.return, phases: .down) { press in
+                press.modifiers.contains(.shift) ? reader.previous() : reader.next()
+                return .handled
+            }
+            .onExitCommand { reader.closeFind() }
             Text(reader.countText)
-                .font(.stamp(10.5))
+                .font(TypeScale.stamp)
                 .foregroundStyle(reader.hits.isEmpty ? Theme.inkFaint : Theme.inkSoft)
                 .fixedSize()
-            HStack(spacing: 2) {
-                IconButton(symbol: "chevron.up", help: "Previous match (⇧⌘G)") { reader.previous() }
-                IconButton(symbol: "chevron.down", help: "Next match (⌘G)") { reader.next() }
+                .accessibilityLabel(reader.countText.isEmpty ? "" : "Matches: \(reader.countText)")
+            HStack(spacing: 0) {
+                IconButton(symbol: "chevron.up", label: "Previous match (⇧⌘G)", size: 22) { reader.previous() }
+                IconButton(symbol: "chevron.down", label: "Next match (⌘G)", size: 22) { reader.next() }
             }
             .disabled(reader.hits.isEmpty)
-            IconButton(symbol: "xmark", help: "Close (Esc)") { reader.closeFind() }
+            Hairline(vertical: true).frame(height: 14)
+            IconButton(symbol: "xmark", label: "Close (Esc)", size: 22) { reader.closeFind() }
         }
         .padding(.leading, 12)
-        .padding(.trailing, 6)
-        .padding(.vertical, 5)
-        .background(Capsule().fill(Theme.well))
-        .overlay(Capsule().strokeBorder(focused ? Theme.me.opacity(0.45) : .clear))
-        .padding(.horizontal, 24)
-        .padding(.top, 8)
+        .padding(.trailing, 4)
+        .frame(height: 30)
+        .fieldChrome(focused: focused)
         .onAppear { focused = true }
         .onChange(of: reader.focusRequest) { _, _ in focused = true }
-    }
-}
-
-/// A borderless symbol button for compact bars.
-struct IconButton: View {
-    let symbol: String
-    let help: String
-    var size: CGFloat = 11
-    let action: () -> Void
-    @Environment(\.isEnabled) private var isEnabled
-    @State private var hovering = false
-
-    var body: some View {
-        Button(action: action) {
-            Image(systemName: symbol)
-                .font(.system(size: size, weight: .semibold))
-                .foregroundStyle(Theme.ink.opacity(isEnabled ? (hovering ? 0.9 : 0.6) : 0.25))
-                .frame(width: 24, height: 22)
-                .background(Circle().fill(hovering && isEnabled ? Theme.surfaceHover : .clear))
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .onHover { hovering = $0 }
-        .help(help)
-        .accessibilityLabel(help)
     }
 }
 
@@ -264,43 +245,40 @@ struct PlayerBar: View {
     @Binding var follow: Bool
 
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: Space.s) {
             HStack(spacing: 2) {
-                IconButton(symbol: "gobackward.15", help: "Back 15 seconds", size: 12) { player.skip(-15) }
-                Button(action: player.toggle) {
-                    Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
-                        .font(.system(size: 12, weight: .bold))
-                        .foregroundStyle(.white)
-                        .frame(width: 30, height: 30)
-                        .background(Circle().fill(Theme.accentGradient))
-                        .contentShape(Circle())
-                }
-                .buttonStyle(.plain)
-                .help(player.isPlaying ? "Pause (Space)" : "Play the recording (Space)")
-                .accessibilityLabel(player.isPlaying ? "Pause" : "Play")
-                IconButton(symbol: "goforward.15", help: "Forward 15 seconds", size: 12) { player.skip(15) }
+                IconButton(symbol: "gobackward.15", label: "Back 15 seconds") { player.skip(-15) }
+                IconButton(
+                    symbol: player.isPlaying ? "pause.fill" : "play.fill",
+                    label: player.isPlaying ? "Pause" : "Play",
+                    help: player.isPlaying ? "Pause (Space)" : "Play the recording (Space)",
+                    size: 32, style: .primary, action: player.toggle)
+                IconButton(symbol: "goforward.15", label: "Forward 15 seconds") { player.skip(15) }
             }
             Text(TranscriptFormat.timestamp(player.time, alwaysHours: player.duration >= 3600))
-                .font(.stamp(10.5)).foregroundStyle(Theme.inkSoft)
+                .font(TypeScale.stamp).foregroundStyle(Theme.ink)
+                .fixedSize()
             Scrubber(time: player.time, duration: player.duration) { player.seek(to: $0) }
             Text(TranscriptFormat.timestamp(player.duration, alwaysHours: player.duration >= 3600))
-                .font(.stamp(10.5)).foregroundStyle(Theme.inkFaint)
+                .font(TypeScale.stamp).foregroundStyle(Theme.inkFaint)
+                .fixedSize()
             Button(action: player.cycleRate) {
-                Text(rateText).font(.stamp(10.5)).frame(minWidth: 26)
+                Text(rateText).font(TypeScale.stamp).frame(minWidth: 24)
             }
-            .buttonStyle(GhostButtonStyle())
+            .buttonStyle(.ghost(.small))
             .help("Playback speed")
-            Button { follow.toggle() } label: {
-                Image(systemName: "text.line.first.and.arrowtriangle.forward")
-                    .foregroundStyle(follow ? Theme.me : Theme.inkFaint)
-            }
-            .buttonStyle(GhostButtonStyle())
-            .help(follow ? "Following the recording in the transcript (click to stop)" : "Follow the recording in the transcript")
-            .accessibilityLabel(follow ? "Stop following playback" : "Follow playback")
+            .accessibilityLabel("Playback speed \(rateText)")
+            IconButton(
+                symbol: "text.line.first.and.arrowtriangle.forward",
+                label: follow ? "Stop following playback" : "Follow playback",
+                help: follow ? "Following the recording in the transcript (click to stop)" : "Follow the recording in the transcript",
+                selected: follow
+            ) { follow.toggle() }
         }
-        .padding(.horizontal, 24)
-        .padding(.vertical, 8)
-        .overlay(alignment: .top) { Rectangle().fill(Theme.hairline).frame(height: 1) }
+        .readableColumn(gutter: Metrics.gutter - 8)
+        .padding(.vertical, 7)
+        .background(Theme.surface.opacity(0.6))
+        .overlay(alignment: .top) { Hairline() }
     }
 
     private var rateText: String {
@@ -320,18 +298,20 @@ struct Scrubber: View {
         GeometryReader { geometry in
             let fraction = duration > 0 ? min(1, max(0, (dragging ?? time) / duration)) : 0
             let width = geometry.size.width
+            let active = hovering || dragging != nil
             ZStack(alignment: .leading) {
-                Capsule().fill(Theme.well).frame(height: 4)
-                Capsule().fill(Theme.me).frame(width: max(4, width * fraction), height: 4)
+                Capsule().fill(Theme.washStrong).frame(height: active ? 5 : 4)
+                Capsule().fill(Theme.ink).frame(width: max(4, width * fraction), height: active ? 5 : 4)
                 Circle()
-                    .fill(Theme.surface)
-                    .overlay(Circle().strokeBorder(Theme.me, lineWidth: 2))
-                    .frame(width: 12, height: 12)
-                    .offset(x: width * fraction - 6)
-                    .opacity(hovering || dragging != nil ? 1 : 0)
+                    .fill(Theme.ink)
+                    .overlay(Circle().strokeBorder(Theme.surface, lineWidth: 2))
+                    .frame(width: 13, height: 13)
+                    .offset(x: width * fraction - 6.5)
+                    .opacity(active ? 1 : 0)
             }
             .frame(maxHeight: .infinity)
             .contentShape(Rectangle())
+            .animation(Motion.quick, value: active)
             .gesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged { value in dragging = position(value.location.x, width) }
@@ -365,34 +345,38 @@ struct TalkTimeStrip: View {
 
     var body: some View {
         let percents = TalkTime.percentages(shares)
-        VStack(alignment: .leading, spacing: 7) {
-            HStack(spacing: 8) {
-                Eyebrow(text: "Talk time")
-                Spacer(minLength: 8)
-                if let duration { Text(duration).font(.stamp(10.5)).foregroundStyle(Theme.inkFaint) }
+        VStack(alignment: .leading, spacing: Space.s) {
+            SectionHeader(title: "Talk time", count: nil) {
+                if let duration {
+                    Label(duration, systemImage: "clock")
+                        .labelStyle(TightLabelStyle(spacing: 4))
+                        .font(TypeScale.stamp)
+                        .foregroundStyle(Theme.inkFaint)
+                }
             }
             GeometryReader { geometry in
                 HStack(spacing: 2) {
                     ForEach(shares) { share in
-                        Capsule()
+                        RoundedRectangle(cornerRadius: 2, style: .continuous)
                             .fill(color(share))
                             .frame(width: max(3, (geometry.size.width - CGFloat(shares.count - 1) * 2) * share.fraction))
                     }
                 }
+                .clipShape(Capsule())
             }
-            .frame(height: 5)
-            FlowingLegend(spacing: 12) {
+            .frame(height: 6)
+            FlowingLegend(spacing: 14) {
                 ForEach(Array(shares.enumerated()), id: \.element.id) { index, share in
                     HStack(spacing: 5) {
-                        Circle().fill(color(share)).frame(width: 6, height: 6)
-                        Text(share.name).font(.ui(11.5, .semibold)).foregroundStyle(Theme.ink).lineLimit(1)
-                        Text("\(percents[index])%").font(.stamp(10.5)).foregroundStyle(Theme.inkSoft)
+                        Dot(color: color(share), size: 6)
+                        Text(share.name).font(TypeScale.captionStrong).foregroundStyle(Theme.ink).lineLimit(1)
+                        Text("\(percents[index])%").font(TypeScale.stamp).foregroundStyle(Theme.inkSoft)
                     }
                     .help("\(share.name): about \(TranscriptFormat.timestamp(share.seconds)) of talk")
                 }
             }
         }
-        .padding(.horizontal, 2)
+        .padding(.vertical, Space.xs)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(
             "Talk time: " + zip(shares, percents).map { "\($0.name) \($1) percent" }.joined(separator: ", "))

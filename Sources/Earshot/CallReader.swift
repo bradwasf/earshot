@@ -336,14 +336,3 @@ extension CallDocument {
         return FileManager.default.fileExists(atPath: url.path) ? url : nil
     }
 }
-
-extension Theme {
-    static let findMatch = Color(nsColor: NSColor(name: nil) { appearance in
-        let isDark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        return NSColor(hex: isDark ? 0xF5B642 : 0xF5C04A, alpha: isDark ? 0.30 : 0.38)
-    })
-    static let findCurrent = Color(nsColor: NSColor(name: nil) { appearance in
-        let isDark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        return NSColor(hex: isDark ? 0xF5B642 : 0xF2A900, alpha: isDark ? 0.75 : 0.85)
-    })
-}

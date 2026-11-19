@@ -8,7 +8,7 @@ struct ExportButton: View {
 
     var body: some View {
         Button { open.toggle() } label: { Label("Export", systemImage: "square.and.arrow.up") }
-            .buttonStyle(GhostButtonStyle())
+            .buttonStyle(.secondary)
             .help("Copy or send this call")
             .popover(isPresented: $open, arrowEdge: .bottom) {
                 ExportMenu { open = false }
@@ -48,9 +48,10 @@ private struct ExportMenu: View {
 
     var body: some View {
         let hasSummary = model.summaryExport != nil
-        VStack(alignment: .leading, spacing: 2) {
+        VStack(alignment: .leading, spacing: 1) {
+            MenuSectionLabel("Share")
             ExportRow(
-                symbol: "number", tint: Theme.tone(3), title: "Copy for Slack",
+                symbol: "number", title: "Copy for Slack",
                 detail: hasSummary ? "Formatted summary, ready to paste" : "There is no summary yet",
                 shortcut: "⇧⌘C", enabled: hasSummary
             ) {
@@ -58,7 +59,7 @@ private struct ExportMenu: View {
                 close()
             }
             ExportRow(
-                symbol: "paperplane.fill", tint: Theme.tone(1), title: "Send to Slack",
+                symbol: "paperplane", title: "Send to Slack",
                 detail: !model.slackReady
                     ? "Add a channel webhook in Settings"
                     : hasSummary ? "Post the summary to your channel" : "There is no summary yet",
@@ -68,7 +69,7 @@ private struct ExportMenu: View {
                 close()
             }
             ExportRow(
-                symbol: "sparkles", tint: Theme.tone(2), title: "Send to Grok Bot",
+                symbol: "sparkles", title: "Send to Grok Bot",
                 detail: !model.grokBotInstalled
                     ? "Grok Bot isn’t installed"
                     : model.canExportTranscript ? "Open the transcript in a new prompt" : "There is no transcript yet",
@@ -77,16 +78,17 @@ private struct ExportMenu: View {
                 model.sendToGrokBot()
                 close()
             }
-            Rectangle().fill(Theme.hairline).frame(height: 1).padding(.vertical, 4).padding(.horizontal, 8)
+            MenuDivider()
+            MenuSectionLabel("Copy")
             ExportRow(
-                symbol: "doc.on.doc.fill", tint: Theme.me, title: "Copy summary",
+                symbol: "doc.on.doc", title: "Copy summary",
                 detail: "Rich text, with Markdown as plain text", enabled: hasSummary
             ) {
                 model.copy(.markdown)
                 close()
             }
             ExportRow(
-                symbol: "checklist", tint: Theme.tone(1), title: "Copy action items",
+                symbol: "checklist", title: "Copy action items",
                 detail: model.hasActionItems ? "The checklist with owners" : "There are no action items",
                 shortcut: "⌥⌘C", enabled: model.hasActionItems
             ) {
@@ -94,15 +96,16 @@ private struct ExportMenu: View {
                 close()
             }
             ExportRow(
-                symbol: "text.quote", tint: Theme.tone(2), title: "Copy transcript",
+                symbol: "text.quote", title: "Copy transcript",
                 detail: "Every line, with speakers and times", enabled: model.canExportTranscript
             ) {
                 model.copy(.transcript)
                 close()
             }
-            Rectangle().fill(Theme.hairline).frame(height: 1).padding(.vertical, 4).padding(.horizontal, 8)
+            MenuDivider()
+            MenuSectionLabel("Save")
             ExportRow(
-                symbol: "arrow.down.doc.fill", tint: Theme.tone(3), title: "Save as Markdown…",
+                symbol: "arrow.down.doc", title: "Save as Markdown…",
                 detail: "Summary and transcript in one file", shortcut: "⇧⌘S",
                 enabled: hasSummary || model.canExportTranscript
             ) {
@@ -110,7 +113,7 @@ private struct ExportMenu: View {
                 model.saveMarkdown()
             }
             ExportRow(
-                symbol: "doc.plaintext.fill", tint: Theme.inkSoft, title: "Save transcript as text…",
+                symbol: "doc.plaintext", title: "Save transcript as text…",
                 detail: "A plain .txt file, one line per turn", enabled: model.canExportTranscript
             ) {
                 close()
@@ -118,7 +121,7 @@ private struct ExportMenu: View {
             }
         }
         .padding(6)
-        .frame(width: 320)
+        .frame(width: 330)
         .background(Theme.surface)
         .presentationBackground(Theme.surface)
     }
@@ -126,7 +129,6 @@ private struct ExportMenu: View {
 
 private struct ExportRow: View {
     let symbol: String
-    let tint: Color
     let title: String
     let detail: String
     var shortcut: String?
@@ -138,48 +140,48 @@ private struct ExportRow: View {
         Button(action: action) {
             HStack(spacing: 10) {
                 Image(systemName: symbol)
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(tint)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(Theme.ink)
                     .frame(width: 28, height: 28)
-                    .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(tint.opacity(0.14)))
+                    .background(
+                        RoundedRectangle(cornerRadius: 7, style: .continuous)
+                            .fill(hovering && enabled ? Theme.surface : Theme.sunken))
+                    .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous).strokeBorder(Theme.hairline))
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(title).font(.ui(13, .semibold)).foregroundStyle(Theme.ink)
-                    Text(detail).font(.ui(11.5)).foregroundStyle(Theme.inkSoft).lineLimit(1)
+                    Text(title).font(TypeScale.bodyStrong).foregroundStyle(Theme.ink)
+                    Text(detail).font(TypeScale.caption).foregroundStyle(Theme.inkSoft).lineLimit(1)
                 }
                 Spacer(minLength: 6)
-                if let shortcut {
-                    Text(shortcut).font(.stamp(10.5)).foregroundStyle(Theme.inkFaint)
-                }
+                if let shortcut { KeyHint(shortcut) }
             }
             .padding(.horizontal, 8)
-            .padding(.vertical, 7)
+            .padding(.vertical, 6)
             .background(
-                RoundedRectangle(cornerRadius: 10, style: .continuous).fill(hovering && enabled ? Theme.well : .clear)
+                RoundedRectangle(cornerRadius: Radius.m, style: .continuous).fill(hovering && enabled ? Theme.wash : .clear)
             )
-            .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-            .opacity(enabled ? 1 : 0.45)
+            .contentShape(RoundedRectangle(cornerRadius: Radius.m, style: .continuous))
+            .opacity(enabled ? 1 : 0.42)
+            .animation(Motion.quick, value: hovering)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressableStyle())
         .disabled(!enabled)
         .onHover { hovering = $0 }
+        .accessibilityHint(detail)
     }
 }
 
-/// A short confirmation that floats above the footer.
-struct ToastView: View {
-    let toast: Toast
+private struct MenuSectionLabel: View {
+    let text: String
+
+    init(_ text: String) { self.text = text }
 
     var body: some View {
-        HStack(spacing: 7) {
-            Image(systemName: toast.symbol).font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.tone(1))
-            Text(toast.text).font(.ui(12.5, .semibold)).foregroundStyle(Theme.background)
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 8)
-        .background(Capsule().fill(Theme.ink))
-        .shadow(color: .black.opacity(0.2), radius: 10, y: 4)
-        .accessibilityElement(children: .combine)
+        Eyebrow(text: text).padding(.horizontal, 10).padding(.top, 6).padding(.bottom, 3)
     }
+}
+
+private struct MenuDivider: View {
+    var body: some View { Hairline().padding(.vertical, 5).padding(.horizontal, 8) }
 }
 
 /// The finished call's title. Click it (or the pencil) to rename the call.
@@ -197,7 +199,7 @@ struct EditableTitle: View {
             if editing {
                 TextField("Call title", text: $draft)
                     .textFieldStyle(.plain)
-                    .font(.ui(22, .semibold))
+                    .font(TypeScale.display)
                     .foregroundStyle(Theme.ink)
                     .focused($focused)
                     .onSubmit(commit)
@@ -207,10 +209,12 @@ struct EditableTitle: View {
                     }
             } else {
                 Text(title)
-                    .font(.ui(22, .semibold))
+                    .font(TypeScale.display)
                     .foregroundStyle(Theme.ink)
                     .lineLimit(2)
                     .onTapGesture(perform: begin)
+                    .accessibilityAddTraits(.isHeader)
+                    .accessibilityHint("Click to rename this call")
                 Image(systemName: "pencil")
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(Theme.inkFaint)
@@ -256,39 +260,13 @@ struct TrashButton: View {
             if armed {
                 Label("Move to Trash?", systemImage: "trash").foregroundStyle(Theme.record)
             } else {
-                Image(systemName: "trash").frame(height: 15)
+                Image(systemName: "trash").frame(minWidth: 14)
             }
         }
-        .buttonStyle(GhostButtonStyle())
+        .buttonStyle(.ghost(.small))
         .disabled(model.phase != .idle)
         .help(armed ? "Click again to move this call to the Trash" : "Move this call to the Trash")
         .accessibilityLabel(armed ? "Confirm: move this call to the Trash" : "Move this call to the Trash")
-        .animation(.snappy(duration: 0.18), value: armed)
-    }
-}
-
-/// Compact search box for the list of recent calls.
-struct SearchField: View {
-    @Binding var text: String
-
-    var body: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "magnifyingglass").font(.system(size: 11, weight: .semibold)).foregroundStyle(Theme.inkFaint)
-            TextField("Search calls", text: $text)
-                .textFieldStyle(.plain)
-                .font(.ui(12.5))
-                .foregroundStyle(Theme.ink)
-            if !text.isEmpty {
-                Button { text = "" } label: {
-                    Image(systemName: "xmark.circle.fill").font(.system(size: 11)).foregroundStyle(Theme.inkFaint)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Clear search")
-            }
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 5)
-        .frame(width: 190)
-        .background(Capsule().fill(Theme.well))
+        .animation(Motion.quick, value: armed)
     }
 }
