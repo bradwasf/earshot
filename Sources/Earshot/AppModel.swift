@@ -65,6 +65,10 @@ struct DisplayTurn: Identifiable, Equatable {
     let text: String
     /// 0 = Me, 1… = remote speakers (see `Theme.tone`).
     let tone: Int
+    /// Saved calls: Earshot's label for the speaker ("Them 2"), even after it was named.
+    var originalLabel: String? = nil
+    /// Saved calls: seconds into the call.
+    var start: Double? = nil
 }
 
 /// A finished call shown in the window (just recorded, or opened from the library).
@@ -74,6 +78,10 @@ struct CallDocument: Equatable {
     var detail: String
     var turns: [DisplayTurn]
     var summary: String?
+    /// Each speaker's share of the talking.
+    var talk: [TalkShare] = []
+    /// "42:10", as written in transcript.md.
+    var durationText: String? = nil
 }
 
 /// A short confirmation shown at the bottom of the window ("Copied — paste it into Slack").
@@ -154,14 +162,18 @@ final class AppModel: ObservableObject {
 
     @Published var phase: Phase = .loading("Loading models…")
     @Published var screen: Screen = .home
-    @Published var tab: Tab = .transcript
+    @Published var tab: Tab = .transcript {
+        didSet { reader.tabChanged(to: tab) }
+    }
     /// Title typed for the next recording.
     @Published var title = ""
     @Published var liveTurns: [DisplayTurn] = []
     @Published var partials: [Channel: String] = [:]
     @Published var elapsed: Double = 0
     @Published var warnings: [String] = []
-    @Published var document: CallDocument?
+    @Published var document: CallDocument? {
+        didSet { reader.documentChanged(from: oldValue, to: document) }
+    }
     @Published var library: [SavedCall] = []
     @Published var status = ""
     @Published var heardSystemAudio = false
@@ -174,6 +186,8 @@ final class AppModel: ObservableObject {
     @Published var sendingToSlack = false
 
     let meter = MeterModel()
+    /// Find, playback and speaker names for the finished call on screen.
+    let reader = CallReader()
 
     private var segments: [TranscriptSegment] = []
     private var liveFolder: URL?
@@ -264,6 +278,9 @@ final class AppModel: ObservableObject {
         guard !isRecording, let loaded = Self.loadDocument(call.folder, date: call.date) else { return }
         document = loaded
         tab = loaded.summary != nil ? .summary : .transcript
+        // Opened from a search: show the query in the call, on the tab where it matches.
+        let query = search.trimmingCharacters(in: .whitespaces)
+        if !query.isEmpty { tab = reader.find(query, in: loaded, preferring: tab) }
         screen = .call
     }
 
@@ -289,10 +306,13 @@ final class AppModel: ObservableObject {
         let turns = loaded.turns.map {
             DisplayTurn(
                 id: "saved-\($0.id)", label: $0.label, time: $0.time, text: $0.text,
-                tone: Theme.tone(channel: $0.channel, speaker: $0.speaker))
+                tone: Theme.tone(channel: $0.channel, speaker: $0.speaker),
+                originalLabel: $0.originalLabel.isEmpty ? nil : $0.originalLabel, start: TranscriptFormat.seconds($0.time))
         }
         return CallDocument(
-            folder: folder, title: loaded.title, detail: detail, turns: turns, summary: CallLibrary.summary(folder: folder))
+            folder: folder, title: loaded.title, detail: detail, turns: turns, summary: CallLibrary.summary(folder: folder),
+            talk: TalkTime.shares(loaded.turns, duration: loaded.duration.flatMap(TranscriptFormat.seconds)),
+            durationText: loaded.duration)
     }
 
     // MARK: - Recording
@@ -312,6 +332,8 @@ final class AppModel: ObservableObject {
     func start(placeholder: String? = nil) async {
         await loadModels()
         guard phase == .idle, let models else { return }
+        // Stop any playback first: the system-audio tap would transcribe it.
+        reader.player.pause()
         phase = .starting
         if case .join = promptPanel.current { promptPanel.dismiss() }
         let defaults = UserDefaults.standard
@@ -513,6 +535,41 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// Speakers can be named in a finished call, but not while a call is recorded or summarized.
+    var canEditSpeakers: Bool {
+        switch phase {
+        case .idle, .loading, .failed: return document != nil
+        case .starting, .recording, .finishing: return false
+        }
+    }
+
+    /// Names a speaker of the call on screen (nil or empty reverts to Earshot's label) in
+    /// transcript.md and summary.md. Returns a message to show when that is not possible.
+    func renameSpeaker(_ label: String, to name: String?) -> String? {
+        guard canEditSpeakers, let current = document else { return "Names can be changed once the call is saved." }
+        do {
+            let shown = try SpeakerNames.rename(folder: current.folder, label: label, to: name)
+            if var updated = Self.loadDocument(current.folder, date: Date()) {
+                updated.detail = current.detail
+                document = updated
+            }
+            refreshLibrary()
+            show(Toast(text: shown == label ? "Back to “\(label)”" : "\(label) is now “\(shown)”"))
+            Log.write("speaker renamed")
+            return nil
+        } catch {
+            return error.localizedDescription
+        }
+    }
+
+    /// Copies one turn: its text, or "[12:03] Priya: …".
+    func copyTurn(_ turn: DisplayTurn, withSpeaker: Bool) {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(withSpeaker ? "[\(turn.time)] \(turn.label): \(turn.text)" : turn.text, forType: .string)
+        show(Toast(text: "Copied"))
+    }
+
     /// Moves a saved call to the Trash.
     func trash(_ folder: URL) {
         guard phase == .idle || document?.folder != folder else { return }
@@ -601,6 +658,13 @@ final class AppModel: ObservableObject {
         let summary = document.folder.appendingPathComponent("summary.md")
         var lines = ["Here is a call I transcribed with Earshot: \"\(document.title)\" (\(document.detail))."]
         lines.append("Full transcript, with speakers and times: \(transcript)")
+        // Named speakers (the transcript already uses the names; say which one is me).
+        var named: [String] = []
+        for turn in document.turns where turn.originalLabel != nil && turn.label != turn.originalLabel {
+            let entry = turn.originalLabel == "Me" ? "\(turn.label) (me)" : turn.label
+            if !named.contains(entry) { named.append(entry) }
+        }
+        if !named.isEmpty { lines.append("Speakers: \(named.joined(separator: ", ")).") }
         if document.summary != nil { lines.append("Summary: \(summary.path)") }
         lines.append("Read them, then help me with follow-ups from this call.")
         guard let url = GrokBotLink.prompt(lines.joined(separator: " ")) else { return }
@@ -761,6 +825,10 @@ final class AppModel: ObservableObject {
     private var autoStart = false
     //   --accept-prompts                 answer every prompt with its main button (end-to-end test)
     //   --send-to-grok                   with --open-latest, run Export › Send to Grok Bot at launch
+    //   --search <query>                 type into the home search (with --open-latest: open the call from it)
+    //   --find <query>                   with --open-latest, open the find bar on that query
+    //   --seek <seconds>                 with --open-latest, move the recording's playhead there (no sound)
+    //   --name-speaker <turn number>     with --open-latest, open the speaker-name editor on that turn
     private var extraWatchedApps: [CallApp] = []
     private var autoAcceptPrompts = false
 
@@ -786,9 +854,29 @@ final class AppModel: ObservableObject {
                 promptPanel.show(kind == "ended" ? .ended(app) : kind == "transcribing" ? .transcribing(app) : .join(app), model: self)
             }
         }
+        if let index = arguments.firstIndex(of: "--search"), index + 1 < arguments.count {
+            search = arguments[index + 1]
+        }
         if arguments.contains("--open-latest") {
             if let latest = CallLibrary.list(root: callsRoot).first { open(latest) }
             if arguments.contains("--transcript") { tab = .transcript }
+            if let index = arguments.firstIndex(of: "--find"), index + 1 < arguments.count {
+                reader.showFind()
+                reader.query = arguments[index + 1]
+            }
+            if let index = arguments.firstIndex(of: "--seek"), index + 1 < arguments.count,
+                let seconds = Double(arguments[index + 1])
+            {
+                reader.player.seek(to: seconds)
+            }
+            if let index = arguments.firstIndex(of: "--name-speaker"), index + 1 < arguments.count,
+                let number = Int(arguments[index + 1])
+            {
+                Task {
+                    try? await Task.sleep(nanoseconds: 1_000_000_000)
+                    reader.renamingTurn = "saved-\(number)"
+                }
+            }
             if arguments.contains("--send-to-grok") {
                 Task {
                     try? await Task.sleep(nanoseconds: 1_500_000_000)

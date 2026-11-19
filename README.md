@@ -94,6 +94,14 @@ While Earshot is running (its window can be closed; it stays in the menu bar), i
 - Anything else that makes one of those apps open the microphone (recording a Slack audio clip, Zoom's microphone test) also triggers the card.
 - Turn it off in Settings › Calls. **Open Earshot when I log in** (same place) keeps it running so that prompts appear without opening the app first.
 
+### Reading a call
+
+- **Name the speakers.** Click a speaker tag (or right-click a turn › *Rename*) and type a name: "Them 1" becomes "Priya", "Me" becomes yours. Every turn by that speaker changes, in the window and in the files: transcript.md gets a `- **Speaker names:** Me = Sam, Them 1 = Priya` line and the names on each turn, and summary.md has the old label replaced as a whole word (the heading and footnote are left alone). Exports and the Grok Bot prompt use the names. Clear the field or choose *Use "Them 1"* to go back. A name cannot be another speaker's label or name. Not available while a call is being recorded or summarized.
+- **Find in call (⌘F).** Highlights every match in the visible tab (transcript or summary), ignoring case and accents, with a "3 of 12" count. Return or ⌘G goes to the next match, ⇧Return or ⇧⌘G to the previous one; Esc closes the bar. Opening a call while the home search has text opens the bar with that query, on the tab where it matches. When the exact phrase is nowhere in the call, each word is highlighted instead.
+- **Play the recording.** When the call has `audio.m4a` (Settings › *Save raw audio*), a player bar appears at the bottom: play/pause (Space), ±15 s, a scrubber, and 1× / 1.5× / 2×. Click a turn's timestamp, or right-click › *Play from here*, to listen from a second before that line. The turn being played is tinted and, while *Follow* is on, kept in view. Playback stops when you leave the call or start a recording.
+- **Talk time.** Above the transcript, a thin bar shows each speaker's share of the talking (e.g. Me 34% · Priya 41% · Them 2 25%) and the call's length. It is estimated from the turns' start times: a turn lasts until the next one starts, but no longer than its words take to say, so pauses do not count.
+- **Right-click a turn** to copy its text, copy it as `[12:03] Priya: …`, play from there, or rename the speaker.
+
 ### Export and Slack
 
 **Export** on a finished call offers:

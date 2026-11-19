@@ -18,6 +18,7 @@ struct EarshotApp: App {
         .windowResizability(.contentMinSize)
         .commands {
             CommandGroup(replacing: .newItem) {}
+            CallCommands(model: model, reader: model.reader)
         }
 
         MenuBarExtra {
