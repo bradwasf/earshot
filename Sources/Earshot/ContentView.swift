@@ -41,6 +41,7 @@ struct ContentView: View {
             }
         }
         .tint(Theme.me)
+        .modifier(AppShellHooks())
         .animation(.snappy(duration: 0.28), value: model.screen)
         .animation(.snappy(duration: 0.22), value: model.toast)
         .onAppear {
@@ -345,13 +346,11 @@ struct HomeView: View {
                     HStack(spacing: 12) {
                         Eyebrow(text: "Recent calls").padding(.leading, 2)
                         Spacer(minLength: 8)
-                        SearchField(text: $model.search)
+                        HomeSearchField(text: $model.search, navigator: model.home)
                     }
                     .padding(.bottom, 2)
                     let calls = model.visibleLibrary
-                    ForEach(calls) { call in
-                        CallRow(call: call, open: { model.open(call) }, trash: { model.trash(call.folder) })
-                    }
+                    RecentCallsList(navigator: model.home, calls: calls)
                     if calls.isEmpty {
                         Text("No calls mention “\(model.search.trimmingCharacters(in: .whitespaces))”.")
                             .font(.reading(14))
@@ -436,6 +435,10 @@ struct CallRow: View {
     let call: SavedCall
     let open: () -> Void
     let trash: () -> Void
+    /// Highlighted with ↑/↓ on the home screen.
+    var selected = false
+    /// The next ⌘⌫ moves this call to the Trash.
+    var armed = false
     @State private var hovering = false
 
     private static let formatter: DateFormatter = {
@@ -473,19 +476,30 @@ struct CallRow: View {
                     .foregroundStyle(Theme.inkFaint)
                 }
                 Spacer(minLength: 8)
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(hovering ? Theme.me : Theme.inkFaint)
-                    .padding(.top, 3)
+                if armed {
+                    Label("Move to Trash? ⌘⌫", systemImage: "trash")
+                        .font(.ui(11.5, .semibold))
+                        .foregroundStyle(Theme.record)
+                        .fixedSize()
+                } else {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(hovering || selected ? Theme.me : Theme.inkFaint)
+                        .padding(.top, 3)
+                }
             }
             .padding(14)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
-                RoundedRectangle(cornerRadius: 12, style: .continuous).fill(hovering ? Theme.surfaceHover : Theme.surface)
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(hovering || selected ? Theme.surfaceHover : Theme.surface)
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .strokeBorder(hovering ? Theme.me.opacity(0.45) : Theme.hairline)
+                    .strokeBorder(
+                        armed ? Theme.record.opacity(0.7)
+                            : selected ? Theme.me.opacity(0.85) : hovering ? Theme.me.opacity(0.45) : Theme.hairline,
+                        lineWidth: selected || armed ? 1.5 : 1)
             )
             .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         }

@@ -62,7 +62,7 @@ Permissions are tied to the app's code signature. `scripts/build-app.sh` signs w
 2. Open Earshot (window, or the waveform icon in the menu bar) and press **Record** (⌘R). Optionally name the call first.
 3. The transcript scrolls live under a two-lane level display (Me above the line, Them below). The tinted card marked *live* is still being recognised; it becomes a regular card once the sentence is committed.
 4. Press the red timer button to stop. Earshot finishes the transcript, writes the summary and shows it as cards: In short, Key points, Decisions, Action items (with an owner chip), Open questions.
-5. The home screen lists your recent calls; click one to read its transcript and summary again.
+5. The home screen lists your recent calls under day headers (Today, Yesterday, weekday names for the past week, then month and year); click one to read its transcript and summary again.
 
 Everything is saved as you go:
 
@@ -75,16 +75,24 @@ Everything is saved as you go:
 
 If you leave the title empty, the call is named after the meeting app that is running (e.g. `zoom-call`) and renamed after the title the summary proposes. **Regenerate Summary** re-runs the summary for the last call, for example with a different model.
 
-**Settings (⌘,)**: call prompts, open at login, Slack webhook, system-audio source, microphone, echo handling, raw audio, speech model, speaker separation, summary model, calls folder.
+**Settings (⌘,)**: call prompts, what happens when a call ends, open at login, global shortcut, notifications, Slack webhook, system-audio source, microphone, echo handling, raw audio, speech model, speaker separation, summary model, calls folder.
 
 ### Call prompts
 
 While Earshot is running (its window can be closed; it stays in the menu bar), it notices when a meeting app joins a call and shows a card in the top-right corner of the screen: **Start transcribing?** with *Transcribe* and *Not now*. The card does not take focus from the call and goes away by itself after 30 seconds. When the call you are recording ends, a second card offers **Stop & summarize**; ignoring it keeps the recording going.
 
+**When a recorded call ends** (Settings › Calls) changes that second card: *Ask me* (the default) shows it as above; *Stop and summarize* shows **Stopping in 5 s** with *Stop now* and *Keep recording*, then stops by itself, so a brief drop does not end the recording (if the meeting app takes the microphone again during the countdown, the card goes away); *Keep recording* shows nothing and leaves stopping to you.
+
 - Watched apps: Zoom, Slack (huddles and calls), Microsoft Teams, Discord, Webex, FaceTime. Calls in a browser tab (Google Meet) are not detected; press Record for those.
 - How it works: every two seconds Earshot asks Core Audio which processes are capturing audio. A watched app holding the microphone for two seconds counts as joining a call; releasing it for six seconds counts as leaving. This needs no extra permission and reads no audio.
 - Anything else that makes one of those apps open the microphone (recording a Slack audio clip, Zoom's microphone test) also triggers the card.
 - Turn it off in Settings › Calls. **Open Earshot when I log in** (same place) keeps it running so that prompts appear without opening the app first.
+
+### Menu bar, global shortcut and notifications
+
+- **⌃⌥⌘R** starts and stops recording from any app, without bringing Earshot forward: a small card confirms (*Transcribing* or *Stopped*) and the menu-bar icon turns into a red dot with the elapsed time. A recording started this way is named like one started with Record. It uses Carbon's hot-key API, so it needs no Accessibility permission. Turn it off in Settings › Shortcut and notifications; if another app already holds ⌃⌥⌘R, Settings says so and the shortcut does nothing.
+- The **menu-bar menu** lists the five newest calls (choose one to open it) and has **Copy Last Summary for Slack**, which copies the newest summary the same way as Export › Copy for Slack.
+- **Summary ready**: when a summary finishes (after a recording or *Regenerate summary*) while the Earshot window is not in front, a notification shows the call's title and TL;DR; clicking it opens the call. A failed summary is notified too. macOS asks for permission the first time; if you decline, Earshot stays quiet. Turn it off in Settings › Shortcut and notifications.
 
 ### Export and Slack
 
@@ -101,7 +109,8 @@ To set up **Send to Slack**: at [api.slack.com/apps](https://api.slack.com/apps)
 
 ### Managing calls
 
-- **Search** on the home screen matches titles, summaries and transcript text.
+- **Search** on the home screen matches titles, summaries and transcript text. ⌘F jumps to it, Esc clears it.
+- **Keyboard**: on the home screen ↑/↓ highlight a call, Return opens it and ⌘⌫ moves it to the Trash (press twice, like the trash button). In a call, Esc or ⌘[ goes back to the list (unless you are typing in a field).
 - **Rename** a call by clicking its title; the folder and both files follow.
 - **Delete** with the trash button on a call (click twice) or *Move to Trash* in a call's right-click menu. Calls go to the macOS Trash and can be put back.
 

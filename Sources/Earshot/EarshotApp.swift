@@ -23,7 +23,7 @@ struct EarshotApp: App {
         MenuBarExtra {
             MenuBarContent().environmentObject(model)
         } label: {
-            Image(systemName: model.isRecording ? "record.circle.fill" : "waveform")
+            MenuBarLabel(model: model)
         }
 
         Settings {
@@ -81,6 +81,7 @@ struct MenuBarContent: View {
             Text(message)
         }
         Divider()
+        MenuBarRecentCalls()
         Button("Show Earshot") {
             openWindow(id: "main")
             NSApp.activate(ignoringOtherApps: true)
