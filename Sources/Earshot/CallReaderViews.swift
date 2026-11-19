@@ -18,17 +18,26 @@ struct CallTranscript: View {
                     if let talk = model.document?.talk, !talk.isEmpty {
                         TalkTimeStrip(shares: talk, duration: model.document?.durationText).padding(.bottom, 4)
                     }
-                    ForEach(turns) { turn in
-                        TurnView(
-                            turn: turn,
-                            reading: TurnReading(
-                                text: reader.findOpen ? reader.highlight(turn.text, block: turn.id) : nil,
-                                playing: canPlay && reader.playingTurn == turn.id,
-                                play: canPlay && turn.start != nil ? { reader.play(from: turn) } : nil,
-                                rename: model.canEditSpeakers && turn.originalLabel != nil ? renaming(turn) : nil)
-                        )
-                        .id(turn.id)
-                        .contextMenu { menu(for: turn, canPlay: canPlay) }
+                    if turns.isEmpty {
+                        Text("No speech was detected; only your notes were saved.")
+                            .font(.ui(12.5)).foregroundStyle(Theme.inkSoft).padding(.bottom, 4)
+                    }
+                    ForEach(TranscriptRow.merge(turns: turns, markers: model.document?.markers ?? [])) { row in
+                        switch row {
+                        case .marker(let marker):
+                            MarkerView(marker: marker)
+                        case .turn(let turn):
+                            TurnView(
+                                turn: turn,
+                                reading: TurnReading(
+                                    text: reader.findOpen ? reader.highlight(turn.text, block: turn.id) : nil,
+                                    playing: canPlay && reader.playingTurn == turn.id,
+                                    play: canPlay && turn.start != nil ? { reader.play(from: turn) } : nil,
+                                    rename: model.canEditSpeakers && turn.originalLabel != nil ? renaming(turn) : nil)
+                            )
+                            .id(turn.id)
+                            .contextMenu { menu(for: turn, canPlay: canPlay) }
+                        }
                     }
                 }
                 .padding(.horizontal, 24)

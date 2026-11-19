@@ -36,6 +36,19 @@ public struct SavedTurn: Identifiable, Sendable, Equatable {
     public var originalLabel: String = ""
 }
 
+/// A note, mark or pause in a saved transcript.
+public struct SavedMarker: Identifiable, Sendable, Equatable {
+    public let id: Int
+    /// How many turns come before it in transcript.md (it is shown right after them).
+    public let afterTurns: Int
+    public let marker: CallMarker
+
+    public static func == (a: SavedMarker, b: SavedMarker) -> Bool {
+        a.id == b.id && a.afterTurns == b.afterTurns && a.marker.kind == b.marker.kind
+            && a.marker.start == b.marker.start && a.marker.end == b.marker.end && a.marker.text == b.marker.text
+    }
+}
+
 /// Reads calls back from ~/Earshot/Calls. The Markdown files are the only storage.
 public enum CallLibrary {
     /// Saved calls, newest first.
@@ -58,18 +71,21 @@ public enum CallLibrary {
                 date: values.creationDate ?? .distantPast,
                 duration: parsed.duration,
                 overview: summary.flatMap(overview(of:)),
-                searchText: ([title, summary ?? ""] + speakerNames(parsed.turns) + parsed.turns.map(\.text))
+                searchText: ([title, summary ?? ""] + speakerNames(parsed.turns) + parsed.turns.map(\.text)
+                    + parsed.markers.map(\.marker.text))
                     .joined(separator: "\n").lowercased(),
                 actionItems: summary.map(ActionItems.parse) ?? [])
         }
         .sorted { $0.date > $1.date }
     }
 
-    public static func load(folder: URL) -> (title: String, duration: String?, turns: [SavedTurn])? {
+    public static func load(
+        folder: URL
+    ) -> (title: String, duration: String?, turns: [SavedTurn], markers: [SavedMarker])? {
         guard let transcript = try? String(contentsOf: folder.appendingPathComponent("transcript.md"), encoding: .utf8)
         else { return nil }
         let parsed = parseTranscript(transcript)
-        return (parsed.title ?? folder.lastPathComponent, parsed.duration, parsed.turns)
+        return (parsed.title ?? folder.lastPathComponent, parsed.duration, parsed.turns, parsed.markers)
     }
 
     /// The names given to speakers in these turns, so searching for "Priya" finds her calls.
@@ -118,14 +134,19 @@ public enum CallLibrary {
         try FileManager.default.trashItem(at: folder, resultingItemURL: nil)
     }
 
-    static func parseTranscript(_ text: String) -> (title: String?, duration: String?, turns: [SavedTurn]) {
+    static func parseTranscript(
+        _ text: String
+    ) -> (title: String?, duration: String?, turns: [SavedTurn], markers: [SavedMarker]) {
         var title: String?
         var duration: String?
         var turns: [SavedTurn] = []
         // Speaker names (see `SpeakerNames`): name → Earshot's label.
         var labelForName: [String: String] = [:]
+        var markers: [SavedMarker] = []
         for line in text.components(separatedBy: "\n") {
-            if title == nil, line.hasPrefix("# ") {
+            if let marker = TranscriptFormat.parseMarkerLine(line) {
+                markers.append(SavedMarker(id: markers.count, afterTurns: turns.count, marker: marker))
+            } else if title == nil, line.hasPrefix("# ") {
                 title = String(line.dropFirst(2)).trimmingCharacters(in: .whitespaces)
             } else if line.hasPrefix("- **Duration:** ") {
                 duration = line.dropFirst("- **Duration:** ".count).split(separator: " ").first.map(String.init)
@@ -147,7 +168,7 @@ public enum CallLibrary {
                         text: String(line[labelEnd.upperBound...]), originalLabel: original))
             }
         }
-        return (title, duration, turns)
+        return (title, duration, turns, markers)
     }
 
     /// The text under "## TL;DR" (nil for summaries that failed or have no such section).

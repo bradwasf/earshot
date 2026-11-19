@@ -18,7 +18,10 @@ struct EarshotApp: App {
         .windowResizability(.contentMinSize)
         .commands {
             CommandGroup(replacing: .newItem) {}
+            // No printing; frees ⇧⌘P (Page Setup) for Pause Recording.
+            CommandGroup(replacing: .printItem) {}
             CallCommands(model: model, reader: model.reader)
+            RecordingCommands(model: model)
         }
 
         MenuBarExtra {
@@ -75,7 +78,11 @@ struct MenuBarContent: View {
             .keyboardShortcut("r")
             .disabled(model.isBusy)
         if model.isRecording {
-            Text("Recording · \(TranscriptFormat.timestamp(model.elapsed))")
+            Text("\(model.paused ? "Paused" : "Recording") · \(TranscriptFormat.timestamp(model.elapsed))")
+            Button(model.paused ? "Resume Recording" : "Pause Recording") { model.togglePause() }
+                .keyboardShortcut("p", modifiers: [.command, .shift])
+            Button("Mark This Moment") { model.addMark() }
+                .keyboardShortcut("b")
         } else if case .finishing(let message) = model.phase {
             Text(message)
         } else if case .loading(let message) = model.phase {

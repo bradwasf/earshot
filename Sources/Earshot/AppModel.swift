@@ -16,6 +16,7 @@ enum Preference {
     static let summarize = "summarize"
     static let callsFolder = "callsFolder"
     static let detectCalls = "detectCalls"
+    static let summaryInstructions = "summaryInstructions"  // extra guidance added to every summary prompt
 
     static func register() {
         UserDefaults.standard.register(defaults: [
@@ -30,7 +31,12 @@ enum Preference {
             summarize: true,
             callsFolder: CallFolder.defaultRoot.path,
             detectCalls: true,
+            summaryInstructions: "",
         ])
+    }
+
+    static var summaryInstructionsText: String {
+        UserDefaults.standard.string(forKey: summaryInstructions) ?? ""
     }
 }
 
@@ -82,6 +88,8 @@ struct CallDocument: Equatable {
     var talk: [TalkShare] = []
     /// "42:10", as written in transcript.md.
     var durationText: String? = nil
+    /// Notes, marks and pauses, drawn between the turns.
+    var markers: [DisplayMarker] = []
 }
 
 /// A short confirmation shown at the bottom of the window ("Copied — paste it into Slack").
@@ -173,6 +181,10 @@ final class AppModel: ObservableObject {
     /// Title typed for the next recording.
     @Published var title = ""
     @Published var liveTurns: [DisplayTurn] = []
+    /// Notes, marks and pauses of the call being recorded.
+    @Published var liveMarkers: [DisplayMarker] = []
+    /// Recording is paused ("off the record"): nothing is transcribed or saved.
+    @Published private(set) var paused = false
     @Published var partials: [Channel: String] = [:]
     @Published var elapsed: Double = 0
     @Published var warnings: [String] = []
@@ -195,6 +207,7 @@ final class AppModel: ObservableObject {
     let reader = CallReader()
 
     private var segments: [TranscriptSegment] = []
+    private var markers: [CallMarker] = []
     private var liveFolder: URL?
     private var models: SpeechModels?
     private var session: CallSession?
@@ -321,10 +334,14 @@ final class AppModel: ObservableObject {
                 tone: Theme.tone(channel: $0.channel, speaker: $0.speaker),
                 originalLabel: $0.originalLabel.isEmpty ? nil : $0.originalLabel, start: TranscriptFormat.seconds($0.time))
         }
+        let markers = loaded.markers.map {
+            DisplayMarker($0.marker, id: "saved-marker-\($0.id)", afterTurns: $0.afterTurns)
+        }
         return CallDocument(
             folder: folder, title: loaded.title, detail: detail, turns: turns, summary: CallLibrary.summary(folder: folder),
-            talk: TalkTime.shares(loaded.turns, duration: loaded.duration.flatMap(TranscriptFormat.seconds)),
-            durationText: loaded.duration)
+            talk: TalkTime.shares(loaded.turns, duration: loaded.duration.flatMap { TranscriptFormat.seconds($0) }),
+            durationText: loaded.duration,
+            markers: markers)
     }
 
     // MARK: - Recording
@@ -351,9 +368,10 @@ final class AppModel: ObservableObject {
         let defaults = UserDefaults.standard
 
         // Microphone permission (the system-audio prompt appears when the tap opens).
-        var captureMicrophone = defaults.string(forKey: Preference.microphone) != "off"
+        let fed = feedFiles.compactMapValues(Self.fileSource)
+        var captureMicrophone = fed.isEmpty ? defaults.string(forKey: Preference.microphone) != "off" : fed[.me] != nil
         var startWarnings: [String] = []
-        if captureMicrophone {
+        if captureMicrophone && fed.isEmpty {
             let granted = await AVCaptureDevice.requestAccess(for: .audio)
             if !granted {
                 captureMicrophone = false
@@ -364,7 +382,7 @@ final class AppModel: ObservableObject {
         }
 
         let systemAudio: SystemAudioChoice
-        switch defaults.string(forKey: Preference.systemSource) ?? "tap" {
+        switch fed.isEmpty ? defaults.string(forKey: Preference.systemSource) ?? "tap" : fed[.them] != nil ? "tap" : "none" {
         case "tap": systemAudio = .tap
         case "none": systemAudio = .none
         case let uid:
@@ -389,7 +407,10 @@ final class AppModel: ObservableObject {
             echoTextGuard: defaults.bool(forKey: Preference.echoGuard))
 
         segments = []
+        markers = []
         liveTurns = []
+        liveMarkers = []
+        paused = false
         partials = [:]
         warnings = startWarnings
         heardSystemAudio = false
@@ -397,7 +418,8 @@ final class AppModel: ObservableObject {
         peakLevels = [:]
         meter.reset()
 
-        let session = CallSession(config: config, models: models) { [weak self] event in
+        let session = CallSession(config: config, models: models, microphone: fed[.me], system: fed[.them]) {
+            [weak self] event in
             Task { @MainActor in self?.handle(event) }
         }
         do {
@@ -417,6 +439,7 @@ final class AppModel: ObservableObject {
         phase = .recording
         status = "Saving to \(liveFolder?.lastPathComponent ?? "…") as you talk"
         Log.write("recording started: system=\(systemAudio) mic=\(captureMicrophone)")
+        runLiveScript()
 
         timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
             Task { @MainActor in
@@ -439,9 +462,11 @@ final class AppModel: ObservableObject {
         guard var result = await session.stop() else {
             phase = .idle
             screen = .home
+            paused = false
             return
         }
         self.session = nil
+        paused = false
         partials = [:]
         meter.reset()
         title = ""
@@ -462,7 +487,9 @@ final class AppModel: ObservableObject {
             tab = .summary
             var summaryError: Error?
             do {
-                let written = try await CallSummary.write(for: &result, model: model) { message in
+                let written = try await CallSummary.write(
+                    for: &result, model: model, instructions: Preference.summaryInstructionsText
+                ) { message in
                     Task { @MainActor in
                         if case .finishing = self.phase { self.phase = .finishing(message) }
                     }
@@ -495,7 +522,9 @@ final class AppModel: ObservableObject {
         document?.summary = nil
         Task {
             do {
-                let written = try await CallSummary.regenerate(folder: folder, model: model) { message in
+                let written = try await CallSummary.regenerate(
+                    folder: folder, model: model, instructions: Preference.summaryInstructionsText
+                ) { message in
                     Task { @MainActor in
                         if case .finishing = self.phase { self.phase = .finishing(message) }
                     }
@@ -532,6 +561,44 @@ final class AppModel: ObservableObject {
             timer?.invalidate()
             _ = await session.stop()
         }
+    }
+
+    // MARK: - Notes, marks and pause
+
+    /// Drops a note into the live transcript. `typingSince` is when the user began typing it, so
+    /// the note lands at the moment it is about, not when Return was pressed.
+    func addNote(_ text: String, typingSince: Date? = nil) {
+        guard isRecording, let session else { return }
+        let secondsAgo = typingSince.map { Date().timeIntervalSince($0) } ?? 0
+        Task {
+            guard let marker = await session.addNote(text, secondsAgo: secondsAgo) else { return }
+            upsert(marker)
+            if marker.kind == .mark { show(Toast(text: "Marked \(TranscriptFormat.timestamp(marker.start))", symbol: "bookmark.fill")) }
+        }
+    }
+
+    /// Marks this moment as important (⌘B), with no text.
+    func addMark() { addNote("") }
+
+    /// Pauses or resumes capture (⇧⌘P). Stopping while paused is fine.
+    func togglePause() { setPaused(!paused) }
+
+    private func setPaused(_ target: Bool) {
+        guard isRecording, let session else { return }
+        Task {
+            if let marker = await session.setPaused(target) { upsert(marker) }
+            paused = await session.isPaused
+            Log.write(paused ? "recording paused" : "recording resumed")
+        }
+    }
+
+    private func upsert(_ marker: CallMarker) {
+        if let index = markers.firstIndex(where: { $0.id == marker.id }) {
+            markers[index] = marker
+        } else {
+            markers.append(marker)
+        }
+        rebuildLiveTurns()
     }
 
     // MARK: - Editing saved calls
@@ -637,7 +704,7 @@ final class AppModel: ObservableObject {
             show(Toast(text: "Summary copied"))
         case .transcript:
             guard let document, !document.turns.isEmpty else { return }
-            let lines = document.turns.map { "[\($0.time)] \($0.label): \($0.text)" }
+            let lines = TranscriptRow.merge(turns: document.turns, markers: document.markers).map(\.plainText)
             pasteboard.clearContents()
             pasteboard.setString(([document.title, document.detail, ""] + lines).joined(separator: "\n"), forType: .string)
             show(Toast(text: "Transcript copied"))
@@ -818,14 +885,50 @@ final class AppModel: ObservableObject {
             if let speaker = segment.speaker { speakerTime[speaker, default: 0] += segment.end - segment.start }
         }
         let remoteSpeakers = speakerTime.values.filter { $0 >= 3 }.count
-        liveTurns = TranscriptFormat.turns(segments, remoteSpeakers: remoteSpeakers).map {
-            DisplayTurn(
-                id: $0.id, label: $0.label, time: TranscriptFormat.timestamp($0.start), text: $0.text,
-                tone: remoteSpeakers > 1 ? Theme.tone(channel: $0.channel, speaker: $0.speaker) : ($0.channel == .me ? 0 : 1))
+        var turns: [DisplayTurn] = []
+        var displayMarkers: [DisplayMarker] = []
+        for entry in TranscriptFormat.entries(segments, markers: markers, remoteSpeakers: remoteSpeakers) {
+            switch entry {
+            case .turn(let turn):
+                turns.append(
+                    DisplayTurn(
+                        id: turn.id, label: turn.label, time: TranscriptFormat.timestamp(turn.start), text: turn.text,
+                        tone: remoteSpeakers > 1
+                            ? Theme.tone(channel: turn.channel, speaker: turn.speaker) : (turn.channel == .me ? 0 : 1)))
+            case .marker(let marker):
+                displayMarkers.append(DisplayMarker(marker, id: marker.id.uuidString, afterTurns: turns.count))
+            }
         }
+        liveTurns = turns
+        if liveMarkers != displayMarkers { liveMarkers = displayMarkers }
     }
 
     // MARK: - Helpers
+
+    /// A 16 kHz WAV played in real time as if it were a capture device (`--feed-them`, `--feed-me`).
+    private static func fileSource(_ url: URL) -> FileAudioSource? {
+        guard let file = try? AVAudioFile(forReading: url), file.processingFormat.sampleRate == Double(Audio.sampleRate),
+            let buffer = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: AVAudioFrameCount(file.length)),
+            (try? file.read(into: buffer)) != nil, let channel = buffer.floatChannelData?[0]
+        else { return nil }
+        let samples = Array(UnsafeBufferPointer(start: channel, count: Int(buffer.frameLength)))
+        return FileAudioSource(samples: samples, label: url.lastPathComponent)
+    }
+
+    private func runLiveScript() {
+        for step in liveScript {
+            Task {
+                try? await Task.sleep(nanoseconds: UInt64(step.seconds * 1e9))
+                switch step.action {
+                case "note": addNote(step.text)
+                case "mark": addMark()
+                case "pause": setPaused(true)
+                case "resume": setPaused(false)
+                default: break
+                }
+            }
+        }
+    }
 
     /// "Zoom call", "FaceTime call"… when a meeting app is running; otherwise "Call".
     static func placeholderTitle() -> String {
@@ -857,6 +960,10 @@ final class AppModel: ObservableObject {
     //   --find <query>                   with --open-latest, open the find bar on that query
     //   --seek <seconds>                 with --open-latest, move the recording's playhead there (no sound)
     //   --name-speaker <turn number>     with --open-latest, open the speaker-name editor on that turn
+    //   --feed-them FILE --feed-me FILE  record from 16 kHz WAV files instead of the devices (no permissions)
+    //   --live-script "mark@5,note@8=Ask about pricing,pause@10,resume@16"   act at call seconds while recording
+    private var feedFiles: [Channel: URL] = [:]
+    private var liveScript: [(seconds: Double, action: String, text: String)] = []
     private var extraWatchedApps: [CallApp] = []
     private var autoAcceptPrompts = false
 
@@ -871,6 +978,19 @@ final class AppModel: ObservableObject {
             title = arguments[index + 1]
         }
         autoAcceptPrompts = arguments.contains("--accept-prompts")
+        for (flag, channel) in [("--feed-them", Channel.them), ("--feed-me", .me)] {
+            if let index = arguments.firstIndex(of: flag), index + 1 < arguments.count {
+                feedFiles[channel] = URL(fileURLWithPath: arguments[index + 1])
+            }
+        }
+        if let index = arguments.firstIndex(of: "--live-script"), index + 1 < arguments.count {
+            liveScript = arguments[index + 1].split(separator: ",").compactMap { item in
+                let (head, text) = item.firstIndex(of: "=").map { (item[..<$0], String(item[item.index(after: $0)...])) } ?? (item[...], "")
+                let parts = head.split(separator: "@")
+                guard parts.count == 2, let seconds = Double(parts[1]) else { return nil }
+                return (seconds, String(parts[0]), text)
+            }
+        }
         if let index = arguments.firstIndex(of: "--watch-app"), index + 1 < arguments.count {
             extraWatchedApps = [CallApp(id: "test", name: "Test", callName: "Test call", bundlePrefixes: [arguments[index + 1]])]
         }
