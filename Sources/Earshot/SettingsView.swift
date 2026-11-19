@@ -16,6 +16,7 @@ struct SettingsView: View {
     @AppStorage(Preference.summarize) private var summarize = true
     @AppStorage(Preference.callsFolder) private var callsFolder = CallFolder.defaultRoot.path
     @AppStorage(Preference.detectCalls) private var detectCalls = true
+    @AppStorage(Preference.summaryInstructions) private var summaryInstructions = ""
 
     @State private var inputs: [AudioDeviceInfo] = []
     @State private var openAtLogin = SMAppService.mainApp.status == .enabled
@@ -102,6 +103,19 @@ struct SettingsView: View {
                 }
                 .disabled(!summarize)
                 Text("Runs locally through Ollama at 127.0.0.1:11434. A missing model is pulled automatically.")
+                    .font(.caption).foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Extra instructions for summaries")
+                    TextField(
+                        "Extra instructions for summaries", text: $summaryInstructions,
+                        prompt: Text("e.g. Write in Spanish. Focus on engineering decisions. Them 1 is Priya, Them 2 is Raj."),
+                        axis: .vertical
+                    )
+                    .labelsHidden()
+                    .lineLimit(3...8)
+                    .textFieldStyle(.roundedBorder)
+                }
+                Text("Added to every summary, including Regenerate Summary. The sections (TL;DR, Key points, Decisions, Action items, Open questions) stay the same.")
                     .font(.caption).foregroundStyle(.secondary)
             }
 

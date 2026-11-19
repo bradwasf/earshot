@@ -61,8 +61,9 @@ Permissions are tied to the app's code signature. `scripts/build-app.sh` signs w
 1. Join your call as usual. Do not change any audio settings: your speakers or headphones and your microphone stay exactly as they are.
 2. Open Earshot (window, or the waveform icon in the menu bar) and press **Record** (⌘R). Optionally name the call first.
 3. The transcript scrolls live under a two-lane level display (Me above the line, Them below). The tinted card marked *live* is still being recognised; it becomes a regular card once the sentence is committed.
-4. Press the red timer button to stop. Earshot finishes the transcript, writes the summary and shows it as cards: In short, Key points, Decisions, Action items (with an owner chip), Open questions.
-5. The home screen lists your recent calls; click one to read its transcript and summary again.
+4. While recording, type in **Add a note…** at the bottom and press Return to drop a note into the transcript (at the moment you started typing), or press **⌘B** (the bookmark button) to mark the moment. Press the pause button next to the timer (**⇧⌘P**) to go off the record; press it again to resume. Both are also in the **Call** menu and the menu-bar menu.
+5. Press the red timer button to stop. Earshot finishes the transcript, writes the summary and shows it as cards: In short, Key points, Decisions, Action items (with an owner chip), Open questions.
+6. The home screen lists your recent calls; click one to read its transcript and summary again.
 
 Everything is saved as you go:
 
@@ -75,7 +76,16 @@ Everything is saved as you go:
 
 If you leave the title empty, the call is named after the meeting app that is running (e.g. `zoom-call`) and renamed after the title the summary proposes. **Regenerate Summary** re-runs the summary for the last call, for example with a different model.
 
-**Settings (⌘,)**: call prompts, open at login, Slack webhook, system-audio source, microphone, echo handling, raw audio, speech model, speaker separation, summary model, calls folder.
+**Settings (⌘,)**: call prompts, open at login, Slack webhook, system-audio source, microphone, echo handling, raw audio, speech model, speaker separation, summary model, extra summary instructions, calls folder.
+
+### Notes, marks and pausing
+
+- **Notes and marks** appear in the transcript as your own asides, not as a speaker, and are saved in `transcript.md` as quote lines (`> **[12:03] Note:** Ask about pricing`, `> **[12:40] Marked**`). The summary treats them as what you found important, so noted and marked moments end up in the key points, decisions or action items. Notes alone do not make a call "with speech": a call with only notes is not summarized.
+- **Pause** stops everything from both sides being transcribed, saved or written to `audio.m4a` (it records silence, so times after you resume still match the call clock). The transcript gets a `> **[03:12 – 04:40] Paused**` line, and the summary is told nothing was captured in that gap. Speech already under way when you pause is kept up to the pause. You can stop while paused; call prompts keep working.
+
+### Summary instructions
+
+Settings › Summary › **Extra instructions for summaries** takes free text that is added to every summary: after a call, **Regenerate Summary**, and `earshot-cli summarize --instructions "…"`. Use it for language ("Write in Spanish"), focus ("Focus on engineering decisions") or names ("Them 1 is Priya, Them 2 is Raj"). The section layout (TL;DR, Key points, Decisions, Action items, Open questions) always stays the same, so the summary view and exports keep working.
 
 ### Call prompts
 
@@ -217,10 +227,12 @@ earshot-cli models                               # download + compile the speech
 earshot-cli devices                              # list audio devices (and whether BlackHole is installed)
 earshot-cli live --seconds 60 --title "Test"     # record the real microphone + system audio
 earshot-cli simulate --them a.wav --me b.wav     # feed two files through the live pipeline in real time
-earshot-cli summarize ~/Earshot/Calls/<folder>   # (re)write summary.md for a saved call
+earshot-cli summarize ~/Earshot/Calls/<folder>   # (re)write summary.md for a saved call (optional --instructions "…")
 ```
 
-Unit tests for the pure logic (timeline alignment, transcript and folder format, summary chunking and merging): `swift test`.
+`live` and `simulate` also take `--pause 20-40`, `--mark 12` and `--note "50=text"` (seconds into the call) to exercise notes, marks and pausing.
+
+Unit tests for the pure logic (timeline alignment, transcript and folder format, notes and pauses, summary chunking, merging and prompts): `swift test`.
 
 Re-running the end-to-end test:
 

@@ -36,7 +36,7 @@ struct ContentView: View {
         .overlay(alignment: .bottom) {
             if let toast = model.toast {
                 ToastView(toast: toast)
-                    .padding(.bottom, 54)
+                    .padding(.bottom, model.screen == .live ? 110 : 54)
                     .transition(.opacity.combined(with: .move(edge: .bottom)))
             }
         }
@@ -72,6 +72,7 @@ struct HeaderView: View {
                     subtitle
                 }
                 Spacer(minLength: 8)
+                if model.screen == .live && model.isRecording { PauseButton() }
                 RecordButton(meter: model.meter)
             }
             .padding(.horizontal, 24)
@@ -80,6 +81,15 @@ struct HeaderView: View {
 
             if model.screen == .live {
                 WaveRibbon(meter: model.meter)
+                    .opacity(model.paused ? 0.35 : 1)
+                    .overlay {
+                        if model.paused {
+                            Label("Paused — off the record", systemImage: "pause.circle.fill")
+                                .font(.ui(12, .semibold))
+                                .foregroundStyle(Theme.inkSoft)
+                        }
+                    }
+                    .animation(.snappy(duration: 0.2), value: model.paused)
                     .frame(height: 58)
                     .padding(.horizontal, 24)
                     .padding(.bottom, 14)
@@ -113,6 +123,8 @@ struct HeaderView: View {
         HStack(spacing: 6) {
             if model.isBusy {
                 ProgressView().controlSize(.mini)
+            } else if model.screen == .live && model.paused {
+                Image(systemName: "pause.fill").font(.system(size: 8, weight: .bold)).foregroundStyle(Theme.inkSoft)
             } else if model.screen == .live {
                 Circle().fill(Theme.record).frame(width: 6, height: 6)
             }
@@ -128,7 +140,9 @@ struct HeaderView: View {
         switch model.phase {
         case .loading(let message), .finishing(let message), .failed(let message): return message
         case .starting: return "Starting…"
-        case .recording: return "Live — you are Me, the Mac's audio is Them"
+        case .recording:
+            if model.paused { return "Paused — off the record until you resume (⇧⌘P)" }
+            return "Live — you are Me, the Mac's audio is Them"
         case .idle:
             if model.screen == .call { return model.document?.detail ?? "" }
             return "Ready. Nothing you say leaves this Mac."
@@ -163,7 +177,7 @@ struct RecordButton: View {
             .overlay(Capsule().strokeBorder(.white.opacity(0.22), lineWidth: 1))
             .shadow(color: glow.opacity(disabled ? 0 : 0.42), radius: hovering ? 14 : 10, y: 4)
             .background {
-                if model.isRecording {
+                if model.isRecording && !model.paused {
                     // Halo that breathes with the loudest input.
                     Capsule()
                         .stroke(Theme.record.opacity(0.35), lineWidth: 2)
@@ -190,7 +204,7 @@ struct RecordButton: View {
 
     private var label: String {
         switch model.phase {
-        case .recording: return TranscriptFormat.timestamp(model.elapsed)
+        case .recording: return model.paused ? "Paused" : TranscriptFormat.timestamp(model.elapsed)
         case .loading: return "Loading"
         case .starting: return "Starting"
         case .finishing: return "Finishing"
@@ -508,14 +522,22 @@ struct LiveView: View {
     private let bottom = "bottom"
 
     var body: some View {
-        if model.liveTurns.isEmpty && model.partials.values.allSatisfy({ $0.isEmpty }) {
+        VStack(spacing: 0) {
+            transcript.frame(maxWidth: .infinity, maxHeight: .infinity)
+            if model.isRecording { NoteComposer() }
+        }
+    }
+
+    @ViewBuilder
+    private var transcript: some View {
+        if model.liveTurns.isEmpty && model.liveMarkers.isEmpty && model.partials.values.allSatisfy({ $0.isEmpty }) {
             listening
         } else {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 10) {
-                        ForEach(model.liveTurns) { turn in
-                            TurnView(turn: turn).transition(.opacity.combined(with: .move(edge: .bottom)))
+                        ForEach(TranscriptRow.merge(turns: model.liveTurns, markers: model.liveMarkers)) { row in
+                            TranscriptRowView(row: row).transition(.opacity.combined(with: .move(edge: .bottom)))
                         }
                         ForEach(Channel.allCases, id: \.self) { channel in
                             if let text = model.partials[channel], !text.isEmpty {
@@ -530,10 +552,11 @@ struct LiveView: View {
                     }
                     .padding(.horizontal, 24)
                     .padding(.vertical, 18)
-                    .animation(.snappy(duration: 0.25), value: model.liveTurns.count)
+                    .animation(.snappy(duration: 0.25), value: model.liveTurns.count + model.liveMarkers.count)
                     .background(OverlayScrollers())
                 }
                 .onChange(of: model.liveTurns) { _, _ in scroll(proxy) }
+                .onChange(of: model.liveMarkers) { _, _ in scroll(proxy) }
                 .onChange(of: model.partials) { _, _ in scroll(proxy) }
                 .overlay(alignment: .bottomTrailing) {
                     Button {
@@ -562,9 +585,11 @@ struct LiveView: View {
 
     private var listening: some View {
         VStack(spacing: 10) {
-            Text("Listening…").font(.ui(19, .semibold)).foregroundStyle(Theme.ink)
+            Text(model.paused ? "Paused" : "Listening…").font(.ui(19, .semibold)).foregroundStyle(Theme.ink)
             Text(
-                model.heardSystemAudio
+                model.paused
+                    ? "Off the record: nothing is transcribed or saved until you resume (⇧⌘P)."
+                    : model.heardSystemAudio
                     ? "Words appear here about half a second after they are spoken."
                     : "Nothing is playing on this Mac yet. If the other side is talking and the Them lane stays flat, allow Earshot under System Settings › Privacy & Security › Screen & System Audio Recording › System Audio Recording Only."
             )
@@ -650,7 +675,8 @@ struct CallView: View {
     @ViewBuilder
     private var transcript: some View {
         let turns = model.document?.turns ?? []
-        if turns.isEmpty {
+        let markers = model.document?.markers ?? []
+        if turns.isEmpty && markers.isEmpty {
             VStack(spacing: 8) {
                 Text("No speech was detected").font(.ui(17, .semibold)).foregroundStyle(Theme.ink)
                 Text("Check that the call's audio plays through this Mac and that the microphone is the one you expect.")
@@ -661,7 +687,11 @@ struct CallView: View {
         } else {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 10) {
-                    ForEach(turns) { TurnView(turn: $0) }
+                    if turns.isEmpty {
+                        Text("No speech was detected; only your notes were saved.")
+                            .font(.ui(12.5)).foregroundStyle(Theme.inkSoft).padding(.bottom, 4)
+                    }
+                    ForEach(TranscriptRow.merge(turns: turns, markers: markers)) { TranscriptRowView(row: $0) }
                 }
                 .padding(.horizontal, 24)
                 .padding(.vertical, 14)
