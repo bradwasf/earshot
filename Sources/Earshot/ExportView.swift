@@ -22,6 +22,16 @@ struct ExportButton: View {
                     .allowsHitTesting(false)
                     .accessibilityHidden(true)
             }
+            .background {
+                // ⌥⌘C copies the action items, ⇧⌘S saves the call as Markdown.
+                VStack {
+                    Button("") { model.copyActionItems() }.keyboardShortcut("c", modifiers: [.command, .option])
+                    Button("") { model.saveMarkdown() }.keyboardShortcut("s", modifiers: [.command, .shift])
+                }
+                .opacity(0)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+            }
             .onAppear {
                 // `--show-export` opens the menu at launch (used for screenshots).
                 if CommandLine.arguments.contains("--show-export") {
@@ -76,11 +86,35 @@ private struct ExportMenu: View {
                 close()
             }
             ExportRow(
+                symbol: "checklist", tint: Theme.tone(1), title: "Copy action items",
+                detail: model.hasActionItems ? "The checklist with owners" : "There are no action items",
+                shortcut: "⌥⌘C", enabled: model.hasActionItems
+            ) {
+                model.copyActionItems()
+                close()
+            }
+            ExportRow(
                 symbol: "text.quote", tint: Theme.tone(2), title: "Copy transcript",
                 detail: "Every line, with speakers and times", enabled: model.canExportTranscript
             ) {
                 model.copy(.transcript)
                 close()
+            }
+            Rectangle().fill(Theme.hairline).frame(height: 1).padding(.vertical, 4).padding(.horizontal, 8)
+            ExportRow(
+                symbol: "arrow.down.doc.fill", tint: Theme.tone(3), title: "Save as Markdown…",
+                detail: "Summary and transcript in one file", shortcut: "⇧⌘S",
+                enabled: hasSummary || model.canExportTranscript
+            ) {
+                close()
+                model.saveMarkdown()
+            }
+            ExportRow(
+                symbol: "doc.plaintext.fill", tint: Theme.inkSoft, title: "Save transcript as text…",
+                detail: "A plain .txt file, one line per turn", enabled: model.canExportTranscript
+            ) {
+                close()
+                model.saveTranscriptText()
             }
         }
         .padding(6)

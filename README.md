@@ -61,7 +61,7 @@ Permissions are tied to the app's code signature. `scripts/build-app.sh` signs w
 1. Join your call as usual. Do not change any audio settings: your speakers or headphones and your microphone stay exactly as they are.
 2. Open Earshot (window, or the waveform icon in the menu bar) and press **Record** (⌘R). Optionally name the call first.
 3. The transcript scrolls live under a two-lane level display (Me above the line, Them below). The tinted card marked *live* is still being recognised; it becomes a regular card once the sentence is committed.
-4. Press the red timer button to stop. Earshot finishes the transcript, writes the summary and shows it as cards: In short, Key points, Decisions, Action items (with an owner chip), Open questions.
+4. Press the red timer button to stop. Earshot finishes the transcript, writes the summary and shows it as cards: In short, Key points, Decisions, Action items (with an owner chip; yours, owned by **Me**, are filled in), Open questions.
 5. The home screen lists your recent calls; click one to read its transcript and summary again.
 
 Everything is saved as you go:
@@ -74,6 +74,14 @@ Everything is saved as you go:
 ```
 
 If you leave the title empty, the call is named after the meeting app that is running (e.g. `zoom-call`) and renamed after the title the summary proposes. **Regenerate Summary** re-runs the summary for the last call, for example with a different model.
+
+### Action items
+
+Action items are saved in `summary.md` as a Markdown task list (`- [ ] **Me** — task`, `- [x] …` once done), which GitHub, Obsidian and most notes apps show as checkboxes. Tick an item off in the Summary tab and the change is written to that one line straight away; anything else you edited in the file is left alone. Summaries written before this (plain `- ` bullets) read as open items and get a checkbox when you first tick one.
+
+Above the recent calls, **Open action items** lists what is still unticked from the calls of the last 30 days, newest first, with the call each one came from (click it to open the call). Ticking one there updates that call's `summary.md` too. Click the heading to fold the list away; it disappears when everything is done.
+
+**Regenerate Summary** keeps your ticks: items in the new summary with the same task stay ticked, and ticked items it leaves out are added back to its action items as done.
 
 **Settings (⌘,)**: call prompts, open at login, Slack webhook, system-audio source, microphone, echo handling, raw audio, speech model, speaker separation, summary model, calls folder.
 
@@ -95,7 +103,12 @@ While Earshot is running (its window can be closed; it stays in the menu bar), i
 | **Copy for Slack** (⇧⌘C) | The summary on the clipboard as rich text that Slack's message box keeps (bold headings, bullets), with Slack markup (`*bold*`, `•`) as the plain-text form. Empty sections and the local file link are left out. |
 | **Send to Slack** | Posts the summary to one channel through a Slack incoming webhook. |
 | **Copy summary** | Rich text for documents, notes and mail; Markdown as the plain-text form. |
+| **Copy action items** (⌥⌘C) | Just the checklist with owners: rich text (☐ open, ☑ done) with a Markdown task list as the plain-text form. |
 | **Copy transcript** | Every line as `[00:12] Them 2: …`. |
+| **Save as Markdown…** (⇧⌘S) | One `.md` file with the summary followed by the full transcript, named after the call. |
+| **Save transcript as text…** | The transcript as a `.txt` file, in the same form as Copy transcript. |
+
+Ticked-off action items are struck through with a ✓ in Slack and rich text, and stay `- [x]` in Markdown.
 
 To set up **Send to Slack**: at [api.slack.com/apps](https://api.slack.com/apps) create an app for your workspace, switch on *Incoming Webhooks*, add a webhook for the channel, and paste its URL (`https://hooks.slack.com/services/…`) into Settings › Slack. *Send a test message* checks it. The URL is stored in your login keychain. Only `hooks.slack.com` addresses are accepted, and nothing is sent until you choose Send to Slack for a specific call; that post is the only network request Earshot makes beyond `127.0.0.1`.
 

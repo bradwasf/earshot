@@ -342,6 +342,7 @@ struct HomeView: View {
         } else {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 10) {
+                    OpenActionItemsSection()
                     HStack(spacing: 12) {
                         Eyebrow(text: "Recent calls").padding(.leading, 2)
                         Spacer(minLength: 8)
