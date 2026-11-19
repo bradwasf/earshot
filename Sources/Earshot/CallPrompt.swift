@@ -16,7 +16,8 @@ final class PromptPanelController {
         let lifetime: Double
         switch prompt {
         case .join, .ended: lifetime = 30
-        case .transcribing: lifetime = 3
+        case .transcribing, .stopped: lifetime = 3
+        case .stopping: lifetime = CallPrompt.stopDelay
         }
 
         let view = PromptCard(prompt: prompt, lifetime: lifetime, model: model) { [weak self] in self?.dismiss() }
@@ -49,7 +50,9 @@ final class PromptPanelController {
         timeout?.cancel()
         timeout = Task { [weak self] in
             try? await Task.sleep(nanoseconds: UInt64(lifetime * 1_000_000_000))
-            if !Task.isCancelled, self?.current == prompt { self?.dismiss() }
+            guard !Task.isCancelled, self?.current == prompt else { return }
+            // The countdown ran out without "Keep recording": stop the call.
+            if case .stopping = prompt { model.acceptCallEnded() } else { self?.dismiss() }
         }
     }
 
@@ -108,7 +111,7 @@ private struct PromptCard: View {
 
     private var app: CallApp {
         switch prompt {
-        case .join(let app), .ended(let app), .transcribing(let app): return app
+        case .join(let app), .ended(let app), .transcribing(let app), .stopping(let app), .stopped(let app): return app
         }
     }
 
@@ -117,7 +120,15 @@ private struct PromptCard: View {
             HStack(alignment: .center, spacing: 12) {
                 icon
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(title).font(.ui(14.5, .semibold)).foregroundStyle(Theme.ink)
+                    if case .stopping = prompt {
+                        TimelineView(.periodic(from: shownAt, by: 1)) { context in
+                            let left = max(1, Int((lifetime - context.date.timeIntervalSince(shownAt)).rounded(.up)))
+                            Text("Stopping in \(left) s").font(.ui(14.5, .semibold)).foregroundStyle(Theme.ink)
+                                .monospacedDigit()
+                        }
+                    } else {
+                        Text(title).font(.ui(14.5, .semibold)).foregroundStyle(Theme.ink)
+                    }
                     Text(detail)
                         .font(.ui(12.5))
                         .foregroundStyle(Theme.inkSoft)
@@ -125,7 +136,7 @@ private struct PromptCard: View {
                 }
                 Spacer(minLength: 0)
             }
-            if case .transcribing = prompt {
+            if isNotice {
                 EmptyView()
             } else {
                 HStack(spacing: 8) {
@@ -145,7 +156,7 @@ private struct PromptCard: View {
         .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Theme.surface))
         .overlay(alignment: .bottomLeading) {
             // Time left before the card goes away on its own.
-            if !isTranscribing {
+            if !isNotice {
                 // Driven by the clock rather than an implicit animation, which would also
                 // animate the card's first layout.
                 TimelineView(.animation(minimumInterval: 1.0 / 30)) { context in
@@ -169,14 +180,20 @@ private struct PromptCard: View {
         .accessibilityLabel("\(title) \(detail)")
     }
 
-    private var isEnded: Bool {
-        if case .ended = prompt { return true }
-        return false
-    }
+    /// The call looks over: the card offers to stop (now, or after a countdown).
+    private var isEnded: Bool { prompt.offersToStop }
 
     private var isTranscribing: Bool {
         if case .transcribing = prompt { return true }
         return false
+    }
+
+    /// A confirmation without buttons that goes away on its own.
+    private var isNotice: Bool {
+        switch prompt {
+        case .transcribing, .stopped: return true
+        case .join, .ended, .stopping: return false
+        }
     }
 
     private var title: String {
@@ -184,6 +201,8 @@ private struct PromptCard: View {
         case .join: return "Start transcribing?"
         case .ended: return "Stop transcribing?"
         case .transcribing: return model.isBusy && !model.isRecording ? "Getting ready…" : "Transcribing"
+        case .stopping: return "Stopping…"
+        case .stopped: return "Stopped"
         }
     }
 
@@ -191,17 +210,31 @@ private struct PromptCard: View {
         switch prompt {
         case .join(let app): return "You joined a \(app.callName)."
         case .ended(let app): return "The \(app.callName) looks like it ended."
-        case .transcribing: return "Stop any time from the menu bar or Earshot."
+        case .transcribing:
+            return model.hotKey.state == .registered
+                ? "Stop any time with \(GlobalHotKey.display) or from the menu bar."
+                : "Stop any time from the menu bar or Earshot."
+        case .stopping(let app): return "The \(app.callName) looks like it ended."
+        case .stopped:
+            return UserDefaults.standard.bool(forKey: Preference.summarize)
+                ? "Saving the transcript, then the summary."
+                : "Saving the transcript."
         }
     }
 
-    private var primaryLabel: String { isEnded ? "Stop & summarize" : "Transcribe" }
+    private var primaryLabel: String {
+        switch prompt {
+        case .stopping: return "Stop now"
+        case .ended: return "Stop & summarize"
+        default: return "Transcribe"
+        }
+    }
 
     private func primary() {
         switch prompt {
         case .join(let app): model.acceptCall(app)
-        case .ended: model.acceptCallEnded()
-        case .transcribing: dismiss()
+        case .ended, .stopping: model.acceptCallEnded()
+        case .transcribing, .stopped: dismiss()
         }
     }
 

@@ -97,8 +97,13 @@ enum CallPrompt: Equatable {
     case join(CallApp)
     /// The call being recorded seems to be over: offer to stop.
     case ended(CallApp)
-    /// Confirmation after accepting `join`.
+    /// Confirmation after accepting `join` (or starting with the global shortcut).
     case transcribing(CallApp)
+    /// The call ended and "When a recorded call ends" is set to stop: a short countdown that
+    /// "Keep recording" cancels.
+    case stopping(CallApp)
+    /// Confirmation after stopping with the global shortcut.
+    case stopped(CallApp)
 }
 
 /// Rolling input levels for the waveform ribbon. Kept apart from `AppModel` so that twenty-odd
@@ -203,6 +208,12 @@ final class AppModel: ObservableObject {
     private var watchTimer: Timer?
     private var toastTask: Task<Void, Never>?
     let promptPanel = PromptPanelController()
+    // App shell (AppShell.swift): global shortcut, notifications, home-list keyboard.
+    let hotKey = GlobalHotKey()
+    let notifier = SummaryNotifier()
+    let home = HomeNavigator()
+    /// Opens (or brings forward) the main window; set by the window's view.
+    var openMainWindow: (() -> Void)?
 
     var isRecording: Bool { phase == .recording }
     var isBusy: Bool {
@@ -224,6 +235,7 @@ final class AppModel: ObservableObject {
         Task { await refreshSummaryModels() }
         slackReady = SlackSettings.webhookURL != nil
         startWatchingForCalls()
+        setUpAppShell()
     }
 
     // MARK: - Models
@@ -297,7 +309,7 @@ final class AppModel: ObservableObject {
         refreshLibrary()
     }
 
-    private static func loadDocument(_ folder: URL, date: Date) -> CallDocument? {
+    static func loadDocument(_ folder: URL, date: Date) -> CallDocument? {
         guard let loaded = CallLibrary.load(folder: folder) else { return nil }
         let formatter = DateFormatter()
         formatter.dateFormat = "EEE d MMM yyyy · HH:mm"
@@ -421,7 +433,7 @@ final class AppModel: ObservableObject {
     func stop() async {
         guard phase == .recording, let session else { return }
         phase = .finishing("Finishing transcript…")
-        if case .ended = promptPanel.current { promptPanel.dismiss() }
+        if promptPanel.current?.offersToStop == true { promptPanel.dismiss() }
         timer?.invalidate()
         timer = nil
         guard var result = await session.stop() else {
@@ -448,6 +460,7 @@ final class AppModel: ObservableObject {
             let model = UserDefaults.standard.string(forKey: Preference.summaryModel) ?? Summarizer.defaultModel
             phase = .finishing("Summarizing with \(model)…")
             tab = .summary
+            var summaryError: Error?
             do {
                 let written = try await CallSummary.write(for: &result, model: model) { message in
                     Task { @MainActor in
@@ -458,12 +471,14 @@ final class AppModel: ObservableObject {
                 Log.write("summary written with \(model) in \(Int(written.seconds)) s")
             } catch {
                 CallSummary.writeFailure(folder: result.folder.url, title: result.title, error: error)
+                summaryError = error
                 warnings.append(error.localizedDescription)
                 status = "Transcript saved (the summary failed)"
                 Log.write("summary failed: \(error.localizedDescription)")
             }
             // The summary may have renamed the call; show what is on disk now.
             document = Self.loadDocument(result.folder.url, date: result.startedAt) ?? document
+            notifySummary(folder: result.folder.url, error: summaryError)
         } else {
             status = result.segments.isEmpty ? "No speech was detected" : "Transcript saved"
         }
@@ -487,9 +502,11 @@ final class AppModel: ObservableObject {
                 }
                 document?.summary = written.markdown
                 status = "Summary regenerated"
+                notifySummary(folder: folder, error: nil)
             } catch {
                 document?.summary = CallLibrary.summary(folder: folder)
                 warnings.append(error.localizedDescription)
+                notifySummary(folder: folder, error: error)
             }
             phase = .idle
             refreshLibrary()
@@ -709,11 +726,22 @@ final class AppModel: ObservableObject {
             case .joined(let app):
                 Log.write("call joined: \(app.id)")
                 // One offer per call, and none while a recording is already running.
-                if !isRecording && phase != .starting { present(.join(app)) }
+                if !isRecording && phase != .starting {
+                    present(.join(app))
+                } else if isRecording, promptPanel.current?.offersToStop == true {
+                    // The call came back after a short drop: withdraw the offer to stop.
+                    promptPanel.dismiss()
+                }
             case .ended(let app):
                 Log.write("call ended: \(app.id)")
                 if promptPanel.current == .join(app) { promptPanel.dismiss() }
-                if isRecording && detector.active.isEmpty { present(.ended(app)) }
+                if isRecording && detector.active.isEmpty {
+                    switch callEndAction {
+                    case .ask: present(.ended(app))
+                    case .stop: present(.stopping(app))
+                    case .keep: break
+                    }
+                }
             }
         }
     }
@@ -726,8 +754,8 @@ final class AppModel: ObservableObject {
             guard promptPanel.current == prompt else { return }
             switch prompt {
             case .join(let app): acceptCall(app)
-            case .ended: acceptCallEnded()
-            case .transcribing: break
+            case .ended, .stopping: acceptCallEnded()
+            case .transcribing, .stopped: break
             }
         }
     }

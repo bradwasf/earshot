@@ -33,11 +33,14 @@ struct SettingsView: View {
                     "Earshot asks “Start transcribing?” when Zoom, Slack, Teams, Discord, Webex or FaceTime starts using the microphone, and offers to stop when the call ends. Nothing is recorded until you accept."
                 )
                 .font(.caption).foregroundStyle(.secondary)
+                CallEndSetting()
                 Toggle("Open Earshot when I log in", isOn: $openAtLogin)
                     .onChange(of: openAtLogin) { _, enabled in setOpenAtLogin(enabled) }
                 Text(loginNote ?? "Earshot can only notice calls while it is running. It stays in the menu bar after you close its window.")
                     .font(.caption).foregroundStyle(.secondary)
             }
+
+            AppShellSettings(hotKey: model.hotKey)
 
             Section("Slack") {
                 SecureField("Channel webhook", text: $webhook, prompt: Text("https://hooks.slack.com/services/…"))
